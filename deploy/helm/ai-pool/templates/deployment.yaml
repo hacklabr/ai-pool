@@ -1,0 +1,135 @@
+{{/* Deployment — AI Provider Pool app (1 réplica no MVP).
+
+     Highlights (spec §3.5.2):
+     - RollingUpdate maxSurge:1 maxUnavailable:0 + graceful shutdown = zero-downtime.
+     - readOnlyRootFilesystem + runAsNonRoot + drop ALL caps + seccomp RuntimeDefault.
+     - Probes: startup generoso, liveness sem DB, readiness checa DB.
+     - KEK + pepper montados como ARQUIVOS readOnly (defesa em profundidade).
+     - DATABASE_URL via env from Secret (ESO ou existingSecret).
+*/}}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "ai-pool.fullname" . }}
+  labels:
+    {{- include "ai-pool.commonLabels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.replicaCount }}
+  revisionHistoryLimit: {{ .Values.revisionHistoryLimit }}
+  strategy:
+    {{- toYaml .Values.strategy | nindent 4 }}
+  selector:
+    matchLabels:
+      {{- include "ai-pool.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "ai-pool.selectorLabels" . | nindent 8 }}
+        # annotation hash invalida pods quando config mudou (rolling restart).
+      annotations:
+        checksum/config: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
+        # Força rolling restart quando Secret muda (ESO rotaciona KEK/pepper).
+        checksum/secret-app: {{ include (print $.Template.BasePath "/externalsecret.yaml") . | sha256sum }}
+        # Prometheus scrape (off no MVP, ligar quando /metrics chegar — ROADMAP).
+        prometheus.io/scrape: "false"
+        prometheus.io/port: "8080"
+        prometheus.io/path: "/metrics"
+    spec:
+      serviceAccountName: {{ include "ai-pool.serviceAccountName" . }}
+      terminationGracePeriodSeconds: {{ .Values.terminationGracePeriodSeconds }}
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      # preStop hook: dá tempo ao kube-proxy/Ingress atualizar endpoints
+      # antes do SIGTERM efetivo. Mitiga 502 em rolling update.
+      # O sleep ocorre no ephemeral container init? NÃO — preStop roda no
+      # próprio container. Como distroless não tem shell, usamos um
+      # noop e contamos com terminationGracePeriodSeconds + PreStopSleep interno
+      # do app (PRESTOP_SLEEP env var, lida no graceful shutdown handler).
+      # Se PRESTOP_SLEEP > 0 no app, este hook é opcional. Mantemos por segurança.
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: {{ .Chart.Name }}
+          image: {{ include "ai-pool.image" . }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          ports:
+            - name: http
+              containerPort: 8080
+              protocol: TCP
+          envFrom:
+            # Tudo do ConfigMap de uma vez (HTTP_ADDR, DEV_MODE, etc).
+            - configMapRef:
+                name: {{ include "ai-pool.configMapName" . }}
+          env:
+            # DATABASE_URL (sensível) do Secret. Key name = database.secretKey.
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "ai-pool.dbSecretName" . }}
+                  key: {{ .Values.database.secretKey }}
+                  optional: false
+            {{- with .Values.extraEnv }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          {{- with .Values.probes.startup.enabled }}
+          {{- if . }}
+          startupProbe:
+            {{- omit $.Values.probes.startup "enabled" | toYaml | nindent 12 }}
+          {{- end }}
+          {{- end }}
+          {{- with .Values.probes.liveness.enabled }}
+          {{- if . }}
+          livenessProbe:
+            {{- omit $.Values.probes.liveness "enabled" | toYaml | nindent 12 }}
+          {{- end }}
+          {{- end }}
+          {{- with .Values.probes.readiness.enabled }}
+          {{- if . }}
+          readinessProbe:
+            {{- omit $.Values.probes.readiness "enabled" | toYaml | nindent 12 }}
+          {{- end }}
+          {{- end }}
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+          securityContext:
+            {{- toYaml .Values.containerSecurityContext | nindent 12 }}
+          volumeMounts:
+            # KEK montado como arquivo readOnly em /etc/aipp/kek.
+            # Defesa em profundidade (Security §9.1): evita /proc/<pid>/environ leak.
+            - name: app-secrets
+              mountPath: /etc/aipp
+              readOnly: true
+            # /tmp writable — readOnlyRootFilesystem exige ponto de montagem
+            # writable para arquivos temporários do runtime (Beego, etc).
+            - name: tmp
+              mountPath: /tmp
+            {{- with .Values.extraVolumeMounts }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+      volumes:
+        # Secret com KEK + token_pepper (materializado via ESO ou manualmente).
+        # defaultMode 0400 = leitura APENAS pelo owner (root ou fsGroup);
+        # montado como tmpfs readOnly.
+        - name: app-secrets
+          secret:
+            secretName: {{ include "ai-pool.appSecretName" . }}
+            defaultMode: 0400
+        - name: tmp
+          emptyDir: {}
+        {{- with .Values.extraVolumes }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+{{- with .Values.image.pullSecrets }}
+      imagePullSecrets:
+{{- toYaml . | nindent 8 }}
+{{- end }}

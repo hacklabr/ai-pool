@@ -1,0 +1,37 @@
+apiVersion: v2
+name: ai-pool
+description: |
+  AI Provider Pool — proxy/load-balancer OpenAI-compatible para múltiplos
+  provedores de LLM (Gemini, Mistral, DeepSeek, Z.ai, Kimi). Distribui carga
+  entre chaves de API, garante resiliência via failover transparente, e
+  centraliza governança por usuário/token.
+
+  Stack: Go + Beego (admin/UI) + net/http puro (proxy core) + PostgreSQL.
+type: application
+
+# Chart version (SemVer) — incrementar a cada release do chart.
+version: 0.1.0
+
+# appVersion = versão da aplicação empacotada (binário Go).
+# Deve casar com a tag da imagem Docker referenciada em values.yaml (image.tag).
+appVersion: "0.1.0"
+
+# Dependências: nenhuma no MVP. Quando o ROADMAP trouxer Redis (multi-réplica),
+# adicionar:
+#   dependencies:
+#     - name: redis
+#       version: "~18.x"
+#       repository: https://charts.bitnami.com/bitnami
+#       condition: redis.enabled
+keywords:
+  - llm
+  - openai
+  - proxy
+  - load-balancer
+  - ai
+  - beego
+  - golang
+home: https://github.com/rafael/ai-pool
+maintainers:
+  - name: AI Provider Pool Maintainers
+icon: ""

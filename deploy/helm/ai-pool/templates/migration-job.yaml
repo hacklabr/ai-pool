@@ -1,0 +1,99 @@
+{{/* Job de Migrations — Helm pre-install/pre-upgrade hook.
+
+     Roda `aipp --migrate-only` ANTES de qualquer pod subir.
+     Mesma imagem do Deployment (mantém paridade de schema/binário).
+
+     Comportamento:
+     - Sucesso (exit 0) → Helm prossegue com install/upgrade.
+     - Falha (exit 1)   → Helm aborta o release (zero pods novos com schema inconsistente).
+
+     Annotations Helm:
+     - helm.sh/hook: pre-install,pre-upgrade     → roda antes de criar/atualizar recursos.
+     - helm.sh/hook-weight: "-5"                 → roda antes de outros hooks (ex.: smoke test = 0).
+     - helm.sh/hook-delete-policy: before-hook-creation  → mantém histórico do Job anterior (auditoria),
+                                                            recria quando um novo hook vai rodar (evita colisão
+                                                            de nome em retry do mesmo release).
+
+     Idempotência: golang-migrate com advisory lock interno.
+     Concurrence-safe: dois Jobs em paralelo (raro) não corrompem.
+     NÃO abre pool pgx — apenas database/sql dedicado (postgres.RunMigrations).
+*/}}
+{{- if .Values.migrations.enabled -}}
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ include "ai-pool.migrationJobName" . }}
+  labels:
+    {{- include "ai-pool.commonLabels" . | nindent 4 }}
+  annotations:
+    "helm.sh/hook": pre-install,pre-upgrade
+    "helm.sh/hook-weight": "-5"
+    "helm.sh/hook-delete-policy": before-hook-creation
+spec:
+  backoffLimit: 2              # 2 retries em caso de falha transitória de DB
+  activeDeadlineSeconds: {{ .Values.migrations.activeDeadlineSeconds }}
+  ttlSecondsAfterFinished: 86400  # mantém Job 24h para auditoria de logs
+  template:
+    metadata:
+      labels:
+        {{- include "ai-pool.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: migration
+    spec:
+      restartPolicy: OnFailure
+      {{- with .Values.migrations.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- else }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- end }}
+      {{- with .Values.migrations.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- else }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- end }}
+      {{- with .Values.migrations.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      containers:
+        - name: migrate
+          image: {{ include "ai-pool.image" . }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          # Flag --migrate-only: roda RunMigrations do embed.FS e sai.
+          # NÃO precisa do ConfigMap/Secrets de aplicação — apenas DATABASE_URL.
+          args:
+            - --migrate-only
+          env:
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "ai-pool.dbSecretName" . }}
+                  key: {{ .Values.database.secretKey }}
+                  optional: false
+            # DEV_MODE=false garante que config.Validate NÃO exija KEK/pepper
+            # (migrate-only ignora esses; DEV_MODE controla validação).
+            - name: DEV_MODE
+              value: "false"
+            # Log em JSON para parsear fácil em stack (Loki/CloudWatch).
+            - name: LOG_FORMAT
+              value: "json"
+            - name: LOG_LEVEL
+              value: "info"
+          resources:
+            {{- toYaml .Values.migrations.resources | nindent 12 }}
+          securityContext:
+            {{- toYaml .Values.containerSecurityContext | nindent 12 }}
+{{- with .Values.image.pullSecrets }}
+      imagePullSecrets:
+{{- toYaml . | nindent 8 }}
+{{- end }}
+{{- end -}}

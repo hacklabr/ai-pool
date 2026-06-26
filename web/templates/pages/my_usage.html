@@ -1,0 +1,150 @@
+{{define "pages/my_usage.html"}}{{template "layouts/base.html" .}}{{end}}
+
+{{define "page-content"}}{{$c := .Content}}<div class="o-stack u-my-6">
+  <div class="o-page-header">
+    <div>
+      <h1>Meu uso</h1>
+      <p class="u-text-muted u-text-sm">Consumo pessoal — últimos 7 dias ({{$c.From.Format "02/01"}} — {{$c.To.Format "02/01/2006"}}). <span id="usage-live-tag" class="u-text-subtle">atualizando a cada 10s…</span></p>
+    </div>
+  </div>
+
+  {{/* KPIs pessoais — sempre renderizados (com IDs) p/ o JS atualizar. */}}
+  <div class="o-grid o-grid--stats">
+    <div class="c-stat-card">
+      <span class="c-stat-card__label">Minhas requisições</span>
+      <span class="c-stat-card__value" id="kpi-requests">{{if $c.Totals}}{{fmtNumber $c.Totals.RequestCount}}{{else}}0{{end}}</span>
+    </div>
+    <div class="c-stat-card c-stat-card--featured">
+      <span class="c-stat-card__label">Tokens economizados</span>
+      <span class="c-stat-card__value" id="kpi-cached">{{if $c.Totals}}{{fmtNumber $c.Totals.CachedTokens}}{{else}}0{{end}}</span>
+      <span class="c-stat-card__hint">via cache de contexto</span>
+    </div>
+    <div class="c-stat-card">
+      <span class="c-stat-card__label">Tokens consumidos</span>
+      <span class="c-stat-card__value" id="kpi-total">{{if $c.Totals}}{{fmtNumber $c.Totals.TotalTokens}}{{else}}0{{end}}</span>
+    </div>
+    <div class="c-stat-card">
+      <span class="c-stat-card__label">Tokens não cacheados</span>
+      <span class="c-stat-card__value" id="kpi-noncached">{{if $c.Totals}}{{fmtNumber $c.Totals.NonCachedTokens}}{{else}}0{{end}}</span>
+      <span class="c-stat-card__hint">total − em cache</span>
+    </div>
+    <div class="c-stat-card" id="kpi-errors-card">
+      <span class="c-stat-card__label">Erros</span>
+      <span class="c-stat-card__value" id="kpi-errors">{{if $c.Totals}}{{fmtNumber $c.Totals.ErrorCount}}{{else}}0{{end}}</span>
+    </div>
+  </div>
+
+  {{/* Distribuição por modelo — canvas sempre presente (JS desenha/ atualiza). */}}
+  <div class="c-chart-card">
+    <h3 class="c-chart-card__title">Distribuição por modelo</h3>
+    <div id="my-usage-chart" class="c-chart-card__canvas"></div>
+  </div>
+
+  <div class="c-card">
+    <div class="c-card__body u-text-sm">
+      <h3 class="c-card__title u-mb-2">Como reduzir seu consumo</h3>
+      <p>Para aproveitar o cache de contexto (e economizar tokens), mantenha o histórico de mensagens em requisições subsequentes da mesma conversa. O proxy roteia automaticamente para a mesma chave, aproveitando o cache do provedor.</p>
+    </div>
+  </div>
+</div>
+
+{{/* Série inicial server-rendered (primeira pintura) — JS assume a partir daqui. */}}
+<script id="my-usage-initial" type="application/json">[{{range $i, $row := $c.SeriesByModel}}{{if $i}},{{end}}{"name":"{{$row.GroupKey}}","value":{{$row.TotalTokens}}}{{end}}]</script>
+<script src="https://cdn.jsdelivr.net/npm/echarts@5.5.1/dist/echarts.min.js"
+        integrity="sha384-Mx5lkUEQPM1pOJCwFtUICyX45KNojXbkWdYhkKUKsbv391mavbfoAmONbzkgYPzR"
+        crossorigin="anonymous"></script>
+<script>
+(function() {
+  const nf = new Intl.NumberFormat('pt-BR');
+  const $ = (id) => document.getElementById(id);
+  let chart = null;
+  let pollTimer = null;
+  let lastUpdate = Date.now();
+
+  function initChart() {
+    if (!window.echarts) return;
+    const el = $('my-usage-chart');
+    if (!el) return;
+    chart = echarts.init(el);
+    const initial = JSON.parse(($('my-usage-initial') || {}).textContent || '[]');
+    renderChart(initial);
+    window.addEventListener('resize', () => chart && chart.resize());
+  }
+
+  function renderChart(data) {
+    if (!chart) return;
+    if (!data || data.length === 0) {
+      chart.clear();
+      chart.setOption({
+        title: { text: 'Sem dados ainda', left: 'center', top: 'center',
+          textStyle: { color: '#888', fontSize: 13, fontWeight: 'normal' } }
+      });
+      return;
+    }
+    chart.setOption({
+      title: null,
+      tooltip: { trigger: 'item', formatter: '{b}: {c} ({d}%)' },
+      series: [{
+        type: 'pie', radius: ['40%', '70%'],
+        label: { show: true, formatter: '{b}\n{d}%' },
+        data: data
+      }]
+    }, true);
+  }
+
+  function applyData(d) {
+    if (!d) return;
+    if (d.totals) {
+      const t = d.totals;
+      if ($('kpi-requests')) $('kpi-requests').textContent = nf.format(t.request_count || 0);
+      if ($('kpi-cached')) $('kpi-cached').textContent = nf.format(t.cached_tokens || 0);
+      if ($('kpi-total')) $('kpi-total').textContent = nf.format(t.total_tokens || 0);
+      if ($('kpi-noncached')) $('kpi-noncached').textContent = nf.format(t.non_cached_tokens || 0);
+      if ($('kpi-errors')) $('kpi-errors').textContent = nf.format(t.error_count || 0);
+      const card = $('kpi-errors-card');
+      if (card) card.classList.toggle('c-stat-card--danger', (t.error_count || 0) > 0);
+    }
+    if (d.series_by_model) {
+      renderChart(d.series_by_model.map(r => ({ name: r.group_key, value: r.total_tokens })));
+    }
+    lastUpdate = Date.now();
+    updateLiveTag();
+  }
+
+  function updateLiveTag() {
+    const tag = $('usage-live-tag');
+    if (!tag) return;
+    const secs = Math.max(0, Math.round((Date.now() - lastUpdate) / 1000));
+    tag.textContent = 'atualizado há ' + secs + 's';
+  }
+
+  async function fetchAndUpdate() {
+    try {
+      const r = await fetch('/api/web/me/usage', { headers: { 'Accept': 'application/json' } });
+      if (!r.ok) return;
+      const d = await r.json();
+      applyData(d);
+    } catch (e) { /* rede instável — tenta no próximo tick */ }
+  }
+
+  function startPolling() {
+    stopPolling();
+    fetchAndUpdate();
+    pollTimer = setInterval(fetchAndUpdate, 10000);
+  }
+  function stopPolling() {
+    if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
+  }
+
+  // Inicia gráfico + polling.
+  initChart();
+  startPolling();
+  setInterval(updateLiveTag, 1000); // atualiza o "há Xs" a cada segundo
+
+  // Pausa o polling quando a aba está oculta (economiza requisições); retoma ao focar.
+  document.addEventListener('visibilitychange', () => {
+    if (document.hidden) stopPolling();
+    else startPolling();
+  });
+})();
+</script>{{end}}

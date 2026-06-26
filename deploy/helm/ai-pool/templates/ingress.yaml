@@ -1,0 +1,46 @@
+{{/* Ingress (nginx-ingress) — TLS termination + roteamento externo.
+
+     ANNOTATIONS SSE SÃO CRÍTICAS (Backend Architect §3.4 + DevOps T1 §3.4):
+     - proxy-buffering: off   → nginx NÃO bufferiza resposta; SSE funciona.
+       Sem isso, o cliente recebe chunks em rajadas (UX quebrada) ou nunca.
+     - proxy-read/send-timeout: 3600 → 1h para streams longos de chat.
+     - proxy_http_version: 1.1 + Connection: "" → keepalive HTTP/1.1 necessário
+       para SSE (HTTP/2 multiplexação também funciona, mas 1.1 é o default mais robusto).
+
+     Conditional on .Values.ingress.enabled=true.
+*/}}
+{{- if .Values.ingress.enabled -}}
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: {{ include "ai-pool.fullname" . }}
+  labels:
+    {{- include "ai-pool.commonLabels" . | nindent 4 }}
+  {{- with .Values.ingress.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  {{- if .Values.ingress.className }}
+  ingressClassName: {{ .Values.ingress.className }}
+  {{- end }}
+  {{- with .Values.ingress.tls }}
+  tls:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+  rules:
+    {{- range .Values.ingress.hosts }}
+    - host: {{ .host | quote }}
+      http:
+        paths:
+          {{- range .paths }}
+          - path: {{ .path }}
+            pathType: {{ .pathType }}
+            backend:
+              service:
+                name: {{ include "ai-pool.fullname" $ }}
+                port:
+                  number: {{ $.Values.service.port }}
+          {{- end }}
+    {{- end }}
+{{- end -}}

@@ -1,0 +1,63 @@
+============================================================================
+  AI Provider Pool ({{ .Chart.AppVersion }}) installed in namespace "{{ .Release.Namespace }}"
+============================================================================
+
+Release:    {{ .Release.Name }}
+Chart:      {{ .Chart.Name }}-{{ .Chart.Version }}
+Image:      {{ .Values.image.repository }}:{{ .Values.image.tag }}
+Replicas:   {{ .Values.replicaCount }}  (Opção A — single-replica MVP)
+
+1. Verify the migration Job completed successfully:
+
+   kubectl -n {{ .Release.Namespace }} logs job/{{ include "ai-pool.migrationJobName" . }} --tail=-1
+   # Look for: "OK: schema at version N (dirty=false)."
+
+2. Verify the pod is Running and Ready:
+
+   kubectl -n {{ .Release.Namespace }} get pods -l "app.kubernetes.io/instance={{ .Release.Name }}"
+   # Expect: STATUS=Running, READY=1/1
+
+3. Smoke-test the HTTP server (port-forward):
+
+   kubectl -n {{ .Release.Namespace }} port-forward svc/{{ include "ai-pool.fullname" . }} 8080:{{ .Values.service.port }} &
+   curl -s http://localhost:8080/healthz    # {"status":"ok"}
+   curl -s http://localhost:8080/readyz     # {"status":"ready","checks":{...}}
+
+4. Bootstrap the admin user (one-time; idempotent):
+
+   kubectl -n {{ .Release.Namespace }} exec deploy/{{ include "ai-pool.fullname" . }} -- \
+     /aipp --bootstrap-admin-username=admin
+   # Set AIPP_BOOTSTRAP_ADMIN_PASSWORD env to a strong password (≥12 chars) first,
+   # e.g. via `kubectl exec ... -- env AIPP_BOOTSTRAP_ADMIN_PASSWORD='...' /aipp --bootstrap-admin-username=admin`
+   # OR run a one-shot Job with the env (recommended for production).
+
+5. {{ if .Values.ingress.enabled -}}
+Access the admin UI at:
+
+   {{ range .Values.ingress.hosts -}}
+   http{{ if $.Values.ingress.tls }}s{{ end }}://{{ .host }}/web/login
+   {{ end -}}
+   {{- else -}}
+Access the admin UI (port-forward as in step 3):
+
+   http://localhost:8080/web/login
+   {{- end }}
+
+6. Configure providers/keys/models via the admin UI, then create an API token
+   (sk-aipp-...) for client apps to use as their OpenAI base_url.
+
+============================================================================
+
+Notes:
+
+- DATABASE_URL: sourced from {{ if .Values.database.existingSecret -}}existing Secret "{{ .Values.database.existingSecret }}"{{ else if .Values.externalSecret.enabled -}}ExternalSecret "{{ include "ai-pool.dbSecretName" . }}" (ESO → backend){{ else -}}inline Secret (dev only){{ end }}.
+- KEK + token_pepper: mounted readOnly at /etc/aipp/ from {{ if .Values.externalSecret.enabled -}}ExternalSecret "{{ include "ai-pool.appSecretName" . }}" (ESO){{ else -}}Secret "{{ include "ai-pool.appSecretName" . }}" (manual){{ end }}.
+- NetworkPolicy: {{ if .Values.networkPolicy.enabled -}}ENABLED (egress restricto a HTTPS externo + DB + DNS){{ else -}}DISABLED (cluster default){{ end }}.
+- Ingress: {{ if .Values.ingress.enabled -}}ENABLED with SSE annotations (proxy-buffering: off, 1h timeouts){{ else -}}DISABLED — set ingress.enabled=true e defina ingress.host{{ end }}.
+
+When scaling beyond 1 replica (Opção B): enable Redis, HPA, PDB, podAntiAffinity.
+See ROADMAP.md for triggers and migration path.
+
+Rollback:
+
+   helm rollback {{ .Release.Name }} --namespace {{ .Release.Namespace }}

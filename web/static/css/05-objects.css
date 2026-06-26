@@ -1,0 +1,111 @@
+/* =============================================================================
+ * ITCSS Layer 05 — Objects (structure-only, layout patterns).
+ *
+ * OOCSS: separa STRUCTURE (aqui) de SKIN (camada 06-components). Objects
+ * não sabem nada sobre cores, tipografia visual ou estado de negócio —
+ * apenas organizam espaço. Componentes compõem objects para layout.
+ *
+ * Naming: prefixo `o-` obrigatório (namespacing ITCSS/BEM).
+ * ============================================================================= */
+
+/* o-layout: layout principal sidebar + main. Fixa sidebar em desktop,
+ * drawer em mobile (controlado por Alpine no template). */
+.o-layout {
+  display: grid;
+  grid-template-areas: "sidebar main";
+  grid-template-columns: var(--sidebar-width) 1fr;
+  min-height: 100vh;
+}
+
+@media (max-width: 48rem) {
+  .o-layout {
+    grid-template-areas: "main";
+    grid-template-columns: 1fr;
+  }
+  /* Sidebar vira drawer off-canvas em mobile (toggle via Alpine) */
+  .o-layout__sidebar {
+    position: fixed;
+    inset: 0 auto 0 0;
+    z-index: 50;
+    transform: translateX(-100%);
+    transition: transform var(--transition-base);
+  }
+  .o-layout__sidebar.is-open {
+    transform: translateX(0);
+  }
+  .o-layout__main {
+    grid-area: main;
+  }
+}
+
+.o-layout__sidebar { grid-area: sidebar; }
+.o-layout__main {
+  grid-area: main;
+  display: flex;
+  flex-direction: column;
+  min-width: 0; /* evita overflow horizontal em grids filhos */
+}
+
+/* o-stack: empilha filhos verticalmente com gap consistente.
+ * Uso: <div class="o-stack">...filhos...</div> */
+.o-stack {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-4);
+}
+
+.o-stack--sm { gap: var(--spacing-2); }
+.o-stack--md { gap: var(--spacing-4); }
+.o-stack--lg { gap: var(--spacing-6); }
+
+/* o-cluster: alinha filhos horizontalmente com gap. Default: wrap. */
+.o-cluster {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--spacing-3);
+}
+
+.o-cluster--between {
+  justify-content: space-between;
+}
+
+.o-cluster--end {
+  justify-content: flex-end;
+}
+
+/* o-grid: grid responsivo de cards. Auto-fit com minmax para fluidez. */
+.o-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 18rem), 1fr));
+  gap: var(--spacing-4);
+}
+
+.o-grid--stats {
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 14rem), 1fr));
+}
+
+/* o-container: limita largura do conteúdo e centraliza. */
+.o-container {
+  width: 100%;
+  max-width: var(--content-max-width);
+  margin-inline: auto;
+  padding-inline: var(--content-padding);
+}
+
+/* o-sidebar-nav: estrutura da navegação lateral (sem cores — cores em c-sidebar). */
+.o-sidebar-nav {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-1);
+}
+
+/* o-page-header: cabeçalho de página (título + ações à direita). */
+.o-page-header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--spacing-3);
+  margin-bottom: var(--spacing-6);
+}

@@ -1,0 +1,132 @@
+{{define "pages/my_tokens.html"}}{{template "layouts/base.html" .}}{{end}}
+
+{{define "page-content"}}{{$c := .Content}}<div class="o-stack u-my-6">
+  <div class="o-page-header">
+    <div>
+      <h1>Meus tokens</h1>
+      <p class="u-text-muted u-text-sm">Tokens <code>sk-aipp-...</code> para autenticar clientes LLM no proxy.</p>
+    </div>
+    <button class="c-button" @click="$dispatch('open-modal', {id: 'modal-new-token'})">
+      + Gerar novo token
+    </button>
+  </div>
+
+  {{if $c.Tokens}}
+    <div class="c-data-table__scroll">
+      <div class="c-data-table">
+        <table>
+          <thead>
+            <tr>
+              <th scope="col">Token (mascarado)</th>
+              <th scope="col">Nome</th>
+              <th scope="col">Status</th>
+              <th scope="col">Criado</th>
+              <th scope="col">Último uso</th>
+              <th scope="col"><span class="u-hidden">Ações</span></th>
+            </tr>
+          </thead>
+          <tbody>
+            {{range $t := $c.Tokens}}
+              <tr id="token-row-{{$t.ID}}">
+                <td><code class="u-break-all">{{$t.MaskedFull}}</code></td>
+                <td>{{if $t.Name}}{{$t.Name}}{{else}}<span class="u-text-subtle">—</span>{{end}}</td>
+                <td><span class="c-status-badge {{tokenStatusClass $t.Status}}">{{tokenStatusLabel $t.Status}}</span></td>
+                <td class="u-text-sm u-text-muted">{{fmtTime $t.CreatedAt}}</td>
+                <td class="u-text-sm">{{if $t.LastUsedAt}}{{fmtTimeRel $t.LastUsedAt}}{{else}}—{{end}}</td>
+                <td>
+                  {{if eq $t.Status "active"}}
+                    <button class="c-button c-button--ghost c-button--sm c-button--danger"
+                            hx-delete="/api/web/me/tokens/{{$t.ID}}"
+                            hx-headers='{"X-CSRF-Token": "{{$.CSRFToken}}"}'
+                            hx-target="#token-row-{{$t.ID}}"
+                            hx-swap="outerHTML"
+                            hx-confirm="Revogar este token? Ação irreversível. Clientes que o usam perderão acesso imediatamente.">
+                      Revogar
+                    </button>
+                  {{end}}
+                </td>
+              </tr>
+            {{end}}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  {{else}}
+    <div class="c-empty-state">
+      <h3 class="c-empty-state__title">Nenhum token</h3>
+      <p class="u-text-muted">Gere um token para começar a usar o proxy.</p>
+    </div>
+  {{end}}
+
+  <div class="c-card">
+    <div class="c-card__body u-text-sm">
+      <h3 class="c-card__title u-mb-2">Como usar</h3>
+      <p class="u-mb-2">Aponte seu cliente OpenAI-compatible para:</p>
+      <pre><code>BASE_URL=https://&lt;seu-host&gt;/v1
+API_KEY=sk-aipp-&lt;key_id&gt;-&lt;secret&gt;</code></pre>
+      <p class="u-text-muted">O proxy é compatível com a API OpenAI. O token <code>sk-aipp-...</code> substitui sua chave de provedor.</p>
+    </div>
+  </div>
+</div>
+
+{{/* Modal: gerar token — mostra sk-aipp-... COMPLETO UMA ÚNICA VEZ */}}
+<div class="c-modal" x-data="{ generatedToken: null, name: '', loading: false }"
+     x-show="$store.modals.open === 'modal-new-token'" x-cloak
+     @keydown.escape.window="$store.modals.close()"
+     @click.self="$store.modals.close()" role="dialog" aria-modal="true" aria-labelledby="modal-new-token-title">
+  <div class="c-modal__dialog">
+    <div class="c-modal__header">
+      <h2 class="c-modal__title" id="modal-new-token-title">Gerar novo token</h2>
+      <button class="c-modal__close" aria-label="Fechar"
+              @click="$store.modals.close(); generatedToken = null"></button>
+    </div>
+
+    {{/* Estado 1: form de criação */}}
+    <form x-show="!generatedToken"
+          @submit.prevent="loading = true;
+            fetch('/api/web/me/tokens', {
+              method: 'POST',
+              headers: {'Content-Type': 'application/json', 'X-CSRF-Token': '{{.CSRFToken}}'},
+              body: JSON.stringify({name})
+            }).then(r => r.json()).then(j => { if (j.token) { generatedToken = j.token; loading = false; } else { throw new Error('geração falhou'); } })
+              .catch(e => { alert(e.message); loading = false; })">
+      <div class="c-form-field">
+        <label for="new-token-name">Nome (opcional)</label>
+        <input id="new-token-name" type="text" x-model="name" maxlength="100"
+               placeholder="meu-token-dev">
+        <p class="c-form-field__hint">Rótulo para identificar este token.</p>
+      </div>
+      <div class="c-modal__footer">
+        <button type="button" class="c-button c-button--ghost" @click="$store.modals.close()">Cancelar</button>
+        <button type="submit" class="c-button" :disabled="loading">
+          <span x-show="!loading">Gerar</span>
+          <span x-show="loading" x-cloak>Gerando…</span>
+        </button>
+      </div>
+    </form>
+
+    {{/* Estado 2: token exibido UMA ÚNICA VEZ */}}
+    <div x-show="generatedToken" x-cloak>
+      <div class="c-toast c-toast--warning u-mb-4" role="alert">
+        <div>
+          <div class="c-toast__title">⚠ Copie AGORA</div>
+          <div class="c-toast__message">Este token completo não será exibido novamente. Armazene com segurança.</div>
+        </div>
+      </div>
+      <div class="c-form-field">
+        <label for="new-token-value">Token (sk-aipp-...)</label>
+        <div class="c-token-display c-token-display--full u-break-all" x-text="generatedToken"></div>
+      </div>
+      <div class="c-modal__footer">
+        <button type="button" class="c-button"
+                @click="navigator.clipboard.writeText(generatedToken); $dispatch('show-toast', {type:'success', title:'Copiado', message:'Token copiado para a área de transferência'})">
+          Copiar token
+        </button>
+        <button type="button" class="c-button c-button--ghost"
+                @click="$store.modals.close(); location.reload()">
+          Concluir
+        </button>
+      </div>
+    </div>
+  </div>
+</div>{{end}}

@@ -1,0 +1,124 @@
+{{define "pages/users.html"}}{{template "layouts/base.html" .}}{{end}}
+
+{{define "page-content"}}{{$c := .Content}}<div class="o-stack u-my-6">
+  <div class="o-page-header">
+    <div>
+      <h1>Usuários</h1>
+      <p class="u-text-muted u-text-sm">Gestão de usuários e roles.</p>
+    </div>
+    <button class="c-button" @click="$dispatch('open-modal', {id: 'modal-new-user'})">
+      + Novo usuário
+    </button>
+  </div>
+
+  {{if $c.Users}}
+    <div class="c-data-table__scroll">
+      <div class="c-data-table">
+        <table>
+          <thead>
+            <tr>
+              <th scope="col">Usuário</th>
+              <th scope="col">Role</th>
+              <th scope="col">Status</th>
+              <th scope="col">Último login</th>
+              <th scope="col">Criado em</th>
+              <th scope="col"><span class="u-hidden">Ações</span></th>
+            </tr>
+          </thead>
+          <tbody>
+            {{range $u := $c.Users}}
+              <tr id="user-row-{{$u.ID}}">
+                <td>
+                  <a href="/web/admin/users/{{$u.ID}}"><strong>{{$u.Username}}</strong></a>
+                  {{if eq $u.ID $.User.UserID}}<span class="u-text-subtle u-text-xs">(você)</span>{{end}}
+                </td>
+                <td>
+                  {{if eq $u.Role "admin"}}
+                    <span class="c-status-badge c-status-badge--warning">admin</span>
+                  {{else}}
+                    <span class="c-status-badge c-status-badge--neutral">user</span>
+                  {{end}}
+                </td>
+                <td>
+                  <span class="c-status-badge {{userStatusClass $u.Status}}">{{userStatusLabel $u.Status}}</span>
+                </td>
+                <td>{{if $u.LastLogin}}{{fmtTimeRel $u.LastLogin}}{{else}}—{{end}}</td>
+                <td class="u-text-sm u-text-muted">{{fmtTime $u.CreatedAt}}</td>
+                <td class="c-key-row__actions">
+                  {{if eq $u.ID $.User.UserID}}
+                    <span class="u-text-subtle u-text-xs">auto</span>
+                  {{else if eq $u.Status "active"}}
+                    <button class="c-button c-button--ghost c-button--sm"
+                            hx-patch="/api/web/admin/users/{{$u.ID}}/status"
+                            hx-headers='{"Content-Type": "application/json", "X-CSRF-Token": "{{$.CSRFToken}}"}'
+                            hx-values='{"status": "disabled"}'
+                            hx-target="#user-row-{{$u.ID}}"
+                            hx-swap="outerHTML"
+                            hx-confirm="Desabilitar {{$u.Username}}? As sessões ativas serão encerradas."
+                            {{/* TODO: retornar partial re-renderizado da linha */}}>
+                      Desabilitar
+                    </button>
+                  {{else}}
+                    <button class="c-button c-button--sm"
+                            hx-patch="/api/web/admin/users/{{$u.ID}}/status"
+                            hx-headers='{"Content-Type": "application/json", "X-CSRF-Token": "{{$.CSRFToken}}"}'
+                            hx-values='{"status": "active"}'
+                            hx-target="#user-row-{{$u.ID}}"
+                            hx-swap="outerHTML">
+                      Habilitar
+                    </button>
+                  {{end}}
+                </td>
+              </tr>
+            {{end}}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  {{else}}
+    <div class="c-empty-state">
+      <h3 class="c-empty-state__title">Nenhum usuário</h3>
+      <p class="u-text-muted">Crie o primeiro usuário via CLI <code>aipp --bootstrap-admin-username=...</code></p>
+    </div>
+  {{end}}
+</div>
+
+{{/* Modal: novo usuário (TODO: criar de fato via POST HTMX) */}}
+<div class="c-modal" x-show="$store.modals.open === 'modal-new-user'" x-cloak
+     @keydown.escape.window="$store.modals.close()"
+     @click.self="$store.modals.close()" role="dialog" aria-modal="true" aria-labelledby="modal-new-user-title">
+  <div class="c-modal__dialog">
+    <div class="c-modal__header">
+      <h2 class="c-modal__title" id="modal-new-user-title">Novo usuário</h2>
+      <button class="c-modal__close" aria-label="Fechar" @click="$store.modals.close()">✕</button>
+    </div>
+    <form hx-post="/api/web/admin/users"
+          hx-headers='{"X-CSRF-Token": "{{.CSRFToken}}"}'
+          hx-on::after-request="if(event.detail.successful) location.reload()">
+      <div class="c-form-field">
+        <label for="new-user-username">Usuário</label>
+        <input id="new-user-username" name="username" type="text" required minlength="3" maxlength="50"
+               pattern="[A-Za-z0-9_-]+" autocomplete="off">
+        <p class="c-form-field__hint">3-50 caracteres. Apenas letras, dígitos, _ e -.</p>
+      </div>
+      <div class="c-form-field">
+        <label for="new-user-password">Senha</label>
+        <input id="new-user-password" name="password" type="password" required minlength="12"
+               autocomplete="new-password">
+        <p class="c-form-field__hint">Mínimo 12 caracteres.</p>
+      </div>
+      <div class="c-form-field">
+        <label for="new-user-role">Role</label>
+        <select id="new-user-role" name="role">
+          <option value="user">Usuário</option>
+          <option value="admin">Admin</option>
+        </select>
+      </div>
+      {{/* hx-ext para enviar JSON em vez de form-urlencoded */}}
+      <div class="c-modal__footer">
+        <button type="button" class="c-button c-button--ghost" @click="$store.modals.close()">Cancelar</button>
+        <button type="submit" class="c-button">Criar</button>
+      </div>
+    </form>
+  </div>
+</div>{{end}}

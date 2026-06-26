@@ -1,0 +1,48 @@
+# Binários
+/bin/
+/dist/
+/aipp
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+*.test
+*.out
+
+# Go workspace
+/go.work
+/go.work.sum
+
+# Dependências (mantemos só go.mod/go.sum versionados)
+/vendor/
+
+# Ambiente / IDE
+.env
+.env.*
+.env.docker
+!.env.example
+!.env.docker.example
+kek-dev.key
+token-pepper-dev.key
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Beego / runtime
+logs/
+conf/app.local.conf
+tmp/
+
+# Coverage
+coverage.out
+coverage.html
+
+# Docker volumes locais (dev)
+.pgdata/
+
+# Mesa workflow (já no repo, mas se preferir ignorar descomente)
+# .mesa/

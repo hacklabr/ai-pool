@@ -1,0 +1,133 @@
+{{define "pages/keys.html"}}{{template "layouts/base.html" .}}{{end}}
+
+{{define "page-content"}}{{$c := .Content}}<div class="o-stack u-my-6">
+  <div class="o-page-header">
+    <div>
+      <h1>Chaves de provedores</h1>
+      <p class="u-text-muted u-text-sm">Gestão de chaves com {{len $c.Keys}} cadastradas.</p>
+    </div>
+    <div class="u-text-sm u-text-muted o-cluster" aria-live="polite">
+      <span class="c-status-badge c-status-badge--success">ativa</span>
+      <span class="c-status-badge c-status-badge--neutral">manual</span>
+      <span class="c-status-badge c-status-badge--warning">auto-desativada</span>
+    </div>
+    <button class="c-button" @click="$dispatch('open-modal', {id: 'modal-new-key'})">
+      + Nova chave
+    </button>
+  </div>
+
+  {{/* Legenda dos 4 estados visuais */}}
+  <div class="c-card">
+    <div class="c-card__body o-cluster u-text-sm">
+      <strong>Estados:</strong>
+      <span class="c-status-badge c-status-badge--success">Ativa</span>no pool, candidata a LRU.
+      <span class="c-status-badge c-status-badge--neutral">Manual</span>admin desativou; só admin reativa.
+      <span class="c-status-badge c-status-badge--warning">Auto-desativada</span>sistema desativou; reativa na data agendada.
+    </div>
+  </div>
+
+  {{if $c.Keys}}
+    <div class="o-stack">
+      {{range $k := $c.Keys}}
+        <div class="c-key-row c-key-row--{{$k.Status}}" id="key-row-{{$k.ID}}">
+          <div>
+            <div class="c-key-row__label">{{$k.Label}}</div>
+            <div class="c-key-row__provider">
+              {{providerSlug $k.ProviderID $c.Providers}} · created {{fmtTimeRel $k.CreatedAt}}
+            </div>
+            {{$u := index $c.KeyUsage $k.ID}}
+            <div class="c-key-row__meta">{{fmtNumber $u.RequestCount}} req · {{fmtNumber $u.TotalTokens}} tokens · {{fmtNumber $u.CachedTokens}} em cache (7d)</div>
+            {{if $k.UserAgentOverride}}
+              <div class="c-key-row__meta">UA: {{$k.UserAgentOverride}}</div>
+            {{end}}
+            {{if eq $k.Status "auto_disabled"}}
+              {{if $k.DisabledUntil}}
+                <div class="c-key-row__meta">↻ reativação em <strong>{{fmtTimeUntil $k.DisabledUntil}}</strong> ({{fmtTime $k.DisabledUntil}})</div>
+              {{else}}
+                <div class="c-key-row__meta">⚠ sem data de reativação agendada</div>
+              {{end}}
+            {{end}}
+            {{if $k.DisabledReason}}
+              <div class="c-key-row__meta u-text-muted">motivo: {{$k.DisabledReason}}{{if gt $k.ErrorCount 0}} · {{$k.ErrorCount}} erros{{end}}</div>
+            {{end}}
+          </div>
+          <div>
+            <span class="c-status-badge {{keyStatusClass $k.Status}}">{{keyStatusLabel $k.Status}}</span>
+          </div>
+          <div class="c-key-row__actions">
+            {{if eq $k.Status "enabled"}}
+              <button class="c-button c-button--ghost c-button--sm"
+                      hx-post="/api/web/admin/keys/{{$k.ID}}/force-disable"
+                      hx-headers='{"X-CSRF-Token": "{{$.CSRFToken}}"}'
+                      hx-confirm="Desativar manualmente a chave '{{$k.Label}}'?"
+                      hx-on::after-request="if(event.detail.successful){location.reload()}else{alert('Falha ao desativar ('+event.detail.xhr.status+')')}">
+                Desativar
+              </button>
+            {{else}}
+              <button class="c-button c-button--warning c-button--sm"
+                      hx-post="/api/web/admin/keys/{{$k.ID}}/force-enable"
+                      hx-headers='{"X-CSRF-Token": "{{$.CSRFToken}}"}'
+                      hx-confirm="Forçar reativação da chave '{{$k.Label}}'? Erros serão zerados."
+                      hx-on::after-request="if(event.detail.successful){location.reload()}else{alert('Falha ao reativar ('+event.detail.xhr.status+')')}">
+                Forçar reativação
+              </button>
+            {{end}}
+          </div>
+        </div>
+      {{end}}
+    </div>
+  {{else}}
+    <div class="c-empty-state">
+      <h3 class="c-empty-state__title">Nenhuma chave cadastrada</h3>
+      <p class="u-text-muted">Clique em <strong>+ Nova chave</strong> para cadastrar uma chave de provedor.</p>
+    </div>
+  {{end}}
+
+{{/* Modal: nova chave */}}
+<div class="c-modal" x-show="$store.modals.open === 'modal-new-key'" x-cloak
+     @keydown.escape.window="$store.modals.close()"
+     @click.self="$store.modals.close()" role="dialog" aria-modal="true" aria-labelledby="modal-new-key-title">
+  <div class="c-modal__dialog">
+    <div class="c-modal__header">
+      <h2 class="c-modal__title" id="modal-new-key-title">Nova chave</h2>
+      <button class="c-modal__close" aria-label="Fechar" @click="$store.modals.close()">✕</button>
+    </div>
+    <form hx-post="/api/web/admin/keys"
+          hx-headers='{"X-CSRF-Token": "{{.CSRFToken}}"}'
+          hx-on::after-request="if(event.detail.successful) location.reload()">
+      <div class="c-form-field">
+        <label for="new-key-provider">Provedor</label>
+        <select id="new-key-provider" name="provider_id" required>
+          <option value="" disabled selected>Selecione um provedor…</option>
+          {{range $p := $c.ProviderList}}
+            <option value="{{$p.ID}}">{{$p.Name}} ({{$p.Slug}})</option>
+          {{end}}
+        </select>
+        {{if not $c.ProviderList}}
+          <p class="c-form-field__hint">Nenhum provedor ativo. Cadastre um provedor antes.</p>
+        {{end}}
+      </div>
+      <div class="c-form-field">
+        <label for="new-key-label">Rótulo</label>
+        <input id="new-key-label" name="label" type="text" required maxlength="100"
+               placeholder="Conta principal do Z.ai">
+      </div>
+      <div class="c-form-field">
+        <label for="new-key-value">Chave de API (secret)</label>
+        <input id="new-key-value" name="value" type="password" required autocomplete="off"
+               placeholder="sk-...">
+        <p class="c-form-field__hint">O valor é cifrado (AES-256-GCM) antes de ser armazenado. Não há como recuperá-lo depois.</p>
+      </div>
+      <div class="c-form-field">
+        <label for="new-key-ua">User-Agent Override (opcional)</label>
+        <input id="new-key-ua" name="user_agent_override" type="text"
+               placeholder="MyApp/1.0">
+      </div>
+      <div class="c-modal__footer">
+        <button type="button" class="c-button c-button--ghost" @click="$store.modals.close()">Cancelar</button>
+        <button type="submit" class="c-button">Criar</button>
+      </div>
+    </form>
+  </div>
+</div>
+</div>{{end}}

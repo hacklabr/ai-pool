@@ -1,0 +1,332 @@
+# =============================================================================
+# values.yaml — AI Provider Pool Helm Chart (produção)
+#
+# Defaults alinhados ao spec §3.5.2:
+#   - replicaCount: 1 (Opção A — single-replica, sem Redis).
+#   - Imagem distroless/base-debian12:nonroot (UID 65532, CA roots p/ HTTPS).
+#   - readOnlyRootFilesystem + runAsNonRoot + drop ALL caps + seccomp.
+#   - Ingress com annotations SSE (proxy-buffering: off, timeouts longos).
+#   - ExternalSecret Operator (ESO) para KEK + DATABASE_URL (gold standard).
+#   - Helm pre-install/pre-upgrade Job hook para migrations (aipp --migrate-only).
+#   - NetworkPolicy DenyAll default + liberações explícitas (blast radius).
+#   - Sem HPA/PDB (não fazem sentido com 1 réplica; comentados p/ ROADMAP).
+#
+# Overrides por ambiente:
+#   helm upgrade --install ai-pool deploy/helm/ai-pool \
+#     -f deploy/helm/ai-pool/values-prod.yaml \
+#     --set image.tag=<sha> --set ingress.host=api.example.com
+# =============================================================================
+
+# === Imagem do container ===
+image:
+  repository: ghcr.io/rafael/ai-pool
+  # Tag IMUTÁVEL (SHA digest preferencial; semver aceitável em release).
+  # NUNCA usar "latest" ou branch name em produção (spec DevOps §6.2).
+  tag: "0.1.0"
+  pullPolicy: IfNotPresent
+  # Se o registry for privado, referenciar existing imagePullSecrets:
+  # pullSecrets:
+  #   - name: ghcr-pull-secret
+
+# === Réplicas (Opção A: single-replica no MVP) ===
+# Gatilhos para subir para ≥2 (especificar em values-prod.yaml): SLA duro,
+# RPS sustentado > 50/s, quotas distribuídas, ou multi-tenancy real. Nessas
+# alturas, Redis torna-se mandatório (especificar via ROADMAP).
+replicaCount: 1
+
+# === Strategy: RollingUpdate zero-downtime ===
+# maxSurge:1 maxUnavailable:0 + graceful shutdown = zero pods indisponíveis
+# durante o deploy. Veja spec §3.5.2.
+strategy:
+  type: RollingUpdate
+  rollingUpdate:
+    maxSurge: 1
+    maxUnavailable: 0
+# revisionHistoryLimit mantém histórico para `helm rollback`.
+revisionHistoryLimit: 10
+
+# Dá tempo ao kube-proxy/Ingress de parar de rotear para o pod que está sendo
+# terminado antes do SIGTERM efetivo (mitiga 502 em rolling update).
+# Soma com o SHUTDOWN_TIMEOUT interno (configurado via env, default 60s).
+terminationGracePeriodSeconds: 75
+
+# === Configuração da aplicação (env vars) ===
+# Valores aqui viram ConfigMap (não-sensível) ou env literal.
+# Secrets (DATABASE_URL, KEK, pepper) vêm de Secret K8s (via ExternalSecret
+# ou existingSecret) — ver seção database/externalSecret abaixo.
+app:
+  # HTTP
+  httpAddr: ":8080"
+
+  # Modo: PRODUÇÃO sempre false. DEV_MODE=true degrada segurança (allow http://
+  # em providers, migrations automáticas no startup, IdentityDecryptor).
+  devMode: "false"
+  # Em prod, http:// para providers é PROIBIDO. O app rejeita startup se
+  # SSRF_ALLOW_HTTP=true com DEV_MODE=false (config.Validate).
+  ssrfAllowHTTP: "false"
+
+  # Observabilidade
+  logLevel: "info"          # debug | info | warn | error
+  logFormat: "json"         # json (prod) | text (dev)
+
+  # Defaults de afinidade/rate-limit (overrides via ConfigMap).
+  affinityTTL: "30m"
+  affinityMaxPerUser: "50"
+  rateLimitBurst: "10"
+  rateLimitPerMin: "60"
+  defaultOrgID: "1"
+
+  # Timeouts HTTP — alinhados com config.go defaults.
+  httpReadHeaderTimeout: "10s"
+  shutdownTimeout: "60s"
+  preStopSleep: "10s"
+
+  # Feature flags (preparação ROADMAP)
+  enableMetrics: "false"    # endpoint /metrics (off no MVP)
+
+  # Paths dos segredos montados como arquivos readOnly via Secret volume
+  # (ESO materializa o Secret; montamos via projectedVolume/secret volume).
+  # KEK = master key para envelope encryption das chaves de provedores no DB.
+  kekPath: /etc/aipp/kek
+  # Pepper para HMAC-SHA256 dos tokens sk-aipp-... (path ou inline via env).
+  tokenPepperPath: /etc/aipp/token_pepper
+
+# === Database ===
+# Default: managed DB (CloudSQL/RDS/Azure DB for PostgreSQL) acessado via
+# DATABASE_URL no formato postgres://user:pass@host:5432/db?sslmode=require.
+# A conexão (com senha) vem do Secret referenciado abaixo.
+database:
+  # existingSecret: se você JÁ TEM um Secret K8s com a chave DATABASE_URL
+  # (gerado por ESO fora deste chart, ou manualmente), aponte aqui.
+  # Ex.: existingSecret: "ai-pool-db-prod"
+  existingSecret: ""
+
+  # url: PARA SMOKE TEST / DEV K8s APENAS. Em produção real, use existingSecret
+  # ou externalSecret.enabled=true. Se setado e existingSecret está vazio e
+  # externalSecret.enabled=false, o chart cria um Secret Opaque com esta URL.
+  # NUNCA committar uma URL real com senha em values-prod.yaml versionado.
+  url: ""
+
+  # Se existingSecret está vazio E externalSecret.enabled=true, este chart
+  # cria um ExternalSecret que materializa o Secret com DATABASE_URL.
+  # A key dentro do Secret DEVE ser "DATABASE_URL".
+  secretKey: DATABASE_URL
+
+  # Configuração do pool pgx (não-sensível, vai para ConfigMap).
+  maxConns: "10"
+  minConns: "2"
+  connMaxLifetime: "1h"
+
+# === External Secrets Operator (ESO) ===
+# Materializa Secrets no cluster a partir de um backend externo
+# (Vault / AWS Secrets Manager / GCP Secret Manager / Azure Key Vault).
+# Gold standard para secrets em K8s (spec Security §9.1, DevOps §3.6).
+externalSecret:
+  enabled: false
+  # SecretStore de onde ler. Deve existir previamente no namespace.
+  # Exemplos:
+  #   secretStoreRef:
+  #     name: vault-backend
+  #     kind: SecretStore       # ou ClusterSecretStore
+  secretStoreRef:
+    name: ""
+    kind: SecretStore
+  # RefreshInterval do ExternalSecret (HZ frequência de sincronização).
+  refreshInterval: 1h
+  # Mapeamento remoteKey → secretKey (chave dentro do Secret K8s gerado).
+  # KEK (master encryption key) e TOKEN_PEPPER viram arquivos montados
+  # readOnly no pod (não env vars — defesa em profundidade).
+  data:
+    - remoteKey: ai-pool/kek          # caminho/key no backend externo
+      secretKey: kek                  # chave dentro do Secret K8s
+      property: ""                    # se o backend retorna JSON, sub-propriedade
+    - remoteKey: ai-pool/token-pepper
+      secretKey: token-pepper
+      property: ""
+
+# === Probe defaults ===
+# startupProbe generoso (cold start pode demorar com warm-up de caches LRU).
+# livenessProbe sem checar DB (evita restart em cascata se DB cai momentaneamente).
+# readinessProbe checa DB — remove pod do Service enquanto DB indisponível.
+probes:
+  startup:
+    enabled: true
+    httpGet:
+      path: /healthz
+      port: http
+    initialDelaySeconds: 0
+    periodSeconds: 10
+    timeoutSeconds: 3
+    failureThreshold: 30        # 5min de tolerância
+    successThreshold: 1
+  liveness:
+    enabled: true
+    httpGet:
+      path: /healthz
+      port: http
+    initialDelaySeconds: 0
+    periodSeconds: 10
+    timeoutSeconds: 2
+    failureThreshold: 3
+  readiness:
+    enabled: true
+    httpGet:
+      path: /readyz
+      port: http
+    initialDelaySeconds: 0
+    periodSeconds: 5
+    timeoutSeconds: 3
+    failureThreshold: 3
+
+# === Resources (constraint DevOps: sempre definir requests e limits) ===
+# Valores conservadores para Go app com ~30 usuários internos.
+# Calibrar via profiling em staging. Aumentar requests se HPA for ativado.
+resources:
+  requests:
+    cpu: 100m
+    memory: 128Mi
+  limits:
+    cpu: 500m
+    memory: 512Mi
+
+# === Security Context (constraint DevOps: hardening mínimo) ===
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 65532          # distroless nonroot UID
+  runAsGroup: 65532
+  fsGroup: 65532
+  seccompProfile:
+    type: RuntimeDefault
+
+containerSecurityContext:
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: true
+  capabilities:
+    drop:
+      - ALL
+
+# === Service ===
+service:
+  type: ClusterIP
+  port: 80
+  # O container escuta em app.httpAddr (default :8080). O Service mapeia
+  # port 80 → targetPort 8080.
+  targetPort: 8080
+  annotations: {}
+
+# === Ingress (nginx-ingress) ===
+# Annotations SSE são CRÍTICAS para streaming de chat funcionar.
+# Sem `proxy-buffering: off`, o nginx bufferiza SSE e o cliente não vê chunks.
+ingress:
+  enabled: false
+  className: nginx
+  annotations:
+    nginx.ingress.kubernetes.io/proxy-buffering: "off"        # ESSENCIAL p/ SSE
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "3600"    # 1h p/ streams longos
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "3600"
+    nginx.ingress.kubernetes.io/configuration-snippet: |
+      proxy_http_version 1.1;
+      proxy_set_header Connection "";
+    # HSTS + security headers (optional):
+    # nginx.ingress.kubernetes.io/force-ssl-redirect: "true"
+  hosts:
+    - host: ai-pool.local
+      paths:
+        - path: /
+          pathType: Prefix
+  tls: []
+  # Exemplo TLS via cert-manager + Let's Encrypt:
+  # tls:
+  #   - secretName: ai-pool-tls
+  #     hosts:
+  #       - ai-pool.example.com
+
+# === Network Policy (blast radius containment) ===
+# DenyAll default; libera egress explícito para DB, DNS, provedores LLM (HTTPS).
+# Em cluster com CNI que suporta NetworkPolicy (Calico/Cilium).
+networkPolicy:
+  enabled: false
+  # Egress para IPs/domínios dos provedores LLM: por padrão aberto em 443,
+  # pois IPs variam. Mitigação adicional: SSRF guard inside-app (blocklist de
+  # RFC1918/loopback/metadata). Egress proxy (Squid/Istio) fica no ROADMAP.
+  ingress:
+    # Permitir tráfego do Ingress controller namespace (rótulos variam por setup).
+    # Default: liberar de qualquer namespace na porta do Service.
+    enabled: true
+  egress:
+    enabled: true
+    # DNS (kube-system)
+    allowDNS: true
+    # HTTPS para provedores LLM (Gemini, Mistral, DeepSeek, Z.ai, Kimi)
+    allowHTTPSExternal: true
+    # PostgreSQL (defina CIDR/host específico em values-prod)
+    # databaseCIDR: "10.0.0.0/8"
+    databaseCIDR: "0.0.0.0/0"
+    databasePort: 5432
+
+# === Migrations Job (Helm pre-install/pre-upgrade hook) ===
+# Roda `aipp --migrate-only` ANTES de qualquer pod subir. Mesma imagem do app.
+# Falha no Job = deploy aborta (zero pods novos com schema inconsistente).
+migrations:
+  enabled: true
+  # activeDeadlineSeconds: timeout do Job. Migrações longas (índices grandes)
+  # precisam de margem. Default 5min (geroso para schema greenfield).
+  activeDeadlineSeconds: 300
+  # Resources do Job (conservador; migrations é CPU-bound em índices).
+  resources:
+    requests:
+      cpu: 100m
+      memory: 64Mi
+    limits:
+      cpu: 500m
+      memory: 256Mi
+  # tolerations/nodeSelector para o Job (herda do Deployment se vazio).
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+
+# === Node placement (Deployment) ===
+nodeSelector: {}
+tolerations: []
+affinity: {}
+# Exemplo de anti-affinity multi-AZ (relevante quando escalar para ≥2 réplicas):
+# affinity:
+#   podAntiAffinity:
+#     preferredDuringSchedulingIgnoredDuringExecution:
+#       - weight: 100
+#         podAffinityTerm:
+#           labelSelector:
+#             matchLabels:
+#               app.kubernetes.io/name: ai-pool
+#           topologyKey: topology.kubernetes.io/zone
+
+# === Service Account ===
+# O app NÃO fala com K8s API (não precisa de RBAC). Criamos SA só para
+# isolamento/auditoria e future-proofing.
+serviceAccount:
+  create: true
+  annotations: {}
+  name: ""
+
+# === PDB/HPA — OMITIDOS do MVP (1 réplica, sem efeito útil) ===
+# Para habilitar quando escalar para multi-réplica + Redis (ROADMAP):
+#
+# podDisruptionBudget:
+#   enabled: true
+#   minAvailable: 1
+#
+# autoscaling:
+#   enabled: true
+#   minReplicas: 2
+#   maxReplicas: 5
+#   targetCPUUtilizationPercentage: 60
+
+# === Extra env vars (escape hatch) ===
+# Para variáveis não cobertas acima. Sobrescreve defaults do ConfigMap.
+extraEnv: []
+#   - name: AFFINITY_TTL
+#     value: "1h"
+
+# === Extra volumes / volumeMounts (escape hatch) ===
+extraVolumes: []
+extraVolumeMounts: []

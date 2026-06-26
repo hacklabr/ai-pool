@@ -1,0 +1,42 @@
+{{define "partials/topbar.html"}}<header class="c-topbar" role="banner">
+  {{/* Botão de toggle do sidebar em mobile */}}
+  <button class="c-icon-button u-hidden-desktop"
+          aria-label="Abrir menu"
+          @click="sidebarOpen = true">
+    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M3 12h18M3 6h18M3 18h18"/></svg>
+  </button>
+
+  <div class="c-topbar__brand">AI Provider Pool</div>
+
+  {{/* Slot de organização — preparação multi-tenant (hidden no MVP) */}}
+  <div class="c-topbar__org-selector"></div>
+
+  <div class="c-topbar__actions">
+    {{/* Toggle de tema (claro/escuro) */}}
+    <button class="c-icon-button"
+            aria-label="Alternar tema"
+            @click="theme = theme === 'light' ? 'dark' : 'light'">
+      <svg x-show="theme === 'light'" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>
+      <svg x-show="theme === 'dark'" x-cloak width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="12" cy="12" r="5"/><path d="M12 1v2M12 21v2M4.22 4.22l1.42 1.42M18.36 18.36l1.42 1.42M1 12h2M21 12h2M4.22 19.78l1.42-1.42M18.36 5.64l1.42-1.42"/></svg>
+    </button>
+
+    {{/* Menu do usuário (dropdown Alpine) */}}
+    <div class="c-user-menu" x-data="{ open: false }" @click.outside="open = false">
+      <button class="c-user-menu__trigger" @click="open = !open" aria-haspopup="true" :aria-expanded="open">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
+        <span>{{.User.Username}}</span>
+        {{if eq .User.Role "admin"}}<span class="c-status-badge c-status-badge--warning">admin</span>{{end}}
+      </button>
+      <div class="c-user-menu__dropdown" x-show="open" x-cloak role="menu">
+        <a class="c-user-menu__item" href="/web/me/tokens" role="menuitem">Meus tokens</a>
+        <a class="c-user-menu__item" href="/web/me/usage" role="menuitem">Meu uso</a>
+        <div class="c-user-menu__divider"></div>
+        <form action="/web/logout" method="post" hx-post="/web/logout" hx-headers='{"X-CSRF-Token": "{{.CSRFToken}}"}'>
+          <button type="submit" class="c-user-menu__item c-user-menu__item--danger" role="menuitem">
+            Sair
+          </button>
+        </form>
+      </div>
+    </div>
+  </div>
+</header>{{end}}

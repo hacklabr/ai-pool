@@ -1,0 +1,61 @@
+{{define "partials/head.html"}}<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{{.Title}}</title>
+<link rel="stylesheet" href="/static/css/main.css">
+
+{{/*
+ * HTMX 2.x, Alpine.js 3.x, ECharts 5.x via CDN com Subresource Integrity (SRI).
+ *
+ * Decisão F8: CSS próprio é embed (self-contained); JS libs via CDN por
+ * pragmatismo (~30 usuários internos com internet). SRI hashes garantem
+ * integridade (defesa contra CDN comprometido). Se rede interna exigir
+ * offline: baixar para /static/vendor/ e trocar os <script src>.
+ *
+ * HTMX: interatividade (CRUD, busca, modais) via atributos HTML.
+ * Alpine: estados efêmeros (dropdowns, modais, dark mode toggle).
+ * ECharts: apenas no dashboard — defer + carregamento condicional abaixo.
+ */}}
+<script src="https://unpkg.com/htmx.org@2.0.4"
+        integrity="sha384-HGfztofotfshcF7+8n44JQL2oJmowVChPTg48S+jvZoztPfvwD79OC/LTtG6dMp+"
+        crossorigin="anonymous" defer></script>
+<script defer src="https://unpkg.com/alpinejs@3.14.1/dist/cdn.min.js"
+        integrity="sha384-l8f0VcPi/M1iHPv8egOnY/15TDwqgbOR1anMIJWvU6nLRgZVLTLSaNqi/TOoT5Fh"
+        crossorigin="anonymous"></script>
+
+{{/* CSRF token injetado em todas as mutações HTMX (double-submit pattern). */}}
+{{if .CSRFToken}}<meta name="csrf-token" content="{{.CSRFToken}}">{{end}}
+
+{{/*
+ * HTMX: configura header CSRF default. Recebe do <meta> via helper.
+ * Executado inline (sem defer) para garantir antes do primeiro hx-*.
+ */}}
+<script>
+window.addEventListener('DOMContentLoaded', function() {
+  var csrf = document.querySelector('meta[name="csrf-token"]');
+  if (csrf && window.htmx) {
+    htmx.config.includeIndicatorStyles = false;
+    document.body.addEventListener('htmx:configRequest', function(evt) {
+      evt.detail.headers['X-CSRF-Token'] = csrf.content;
+    });
+  }
+});
+
+{{/*
+ * Alpine store global para controle de modais. Permite abrir/fechar modais
+ * a partir de qualquer botão via $dispatch('open-modal', {id: 'modal-x'}).
+ * O modal escuta x-show="$store.modals.open === 'modal-x'".
+ */}}
+document.addEventListener('alpine:init', function() {
+  if (!window.Alpine) return;
+  Alpine.store('modals', {
+    open: null,
+    show(id) { this.open = id; document.body.style.overflow = 'hidden'; },
+    close() { this.open = null; document.body.style.overflow = ''; }
+  });
+  // Helper de nível documento: <button @click="$dispatch('open-modal', ...)>
+  document.addEventListener('open-modal', function(e) {
+    if (e.detail && e.detail.id) Alpine.store('modals').show(e.detail.id);
+  });
+});
+</script>
+{{end}}

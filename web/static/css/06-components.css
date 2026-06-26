@@ -1,0 +1,684 @@
+/* =============================================================================
+ * ITCSS Layer 06 — Components (skin + comportamento).
+ *
+ * Componentes BEM específicos do produto. Cada bloco é independente: pode ser
+ * movido/reusado sem side-effects. Nomes SEMâNTICOS (não apresentacionais):
+ *   c-button--danger (correto)   vs   c-button--red (errado).
+ *
+ * Naming: prefixo `c-` + BEM block__element--modifier.
+ * States: classes `.is-*` / `.has-*` toggled por JS/Alpine.
+ *
+ * Ordem alfabética aproximada por bloco para facilitar navegação.
+ * ============================================================================= */
+
+/* === c-button ============================================================ */
+.c-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--spacing-2);
+  padding: var(--button-padding-y) var(--button-padding-x);
+  background-color: var(--button-bg);
+  color: var(--button-color);
+  border: 1px solid transparent;
+  border-radius: var(--button-radius);
+  font-size: var(--font-size-sm);
+  font-weight: var(--button-font-weight);
+  line-height: 1.2;
+  cursor: pointer;
+  transition: background-color var(--transition-fast), border-color var(--transition-fast), opacity var(--transition-fast);
+  white-space: nowrap;
+  user-select: none;
+}
+
+.c-button:hover { background-color: var(--button-bg-hover); }
+.c-button:active { transform: translateY(1px); }
+.c-button:disabled,
+.c-button[disabled] { opacity: 0.5; cursor: not-allowed; }
+
+.c-button--ghost {
+  --button-bg: transparent;
+  --button-bg-hover: var(--color-surface-hover);
+  --button-color: var(--color-text-muted);
+  border-color: var(--color-border);
+}
+
+.c-button--danger {
+  --button-bg: var(--color-danger);
+  --button-bg-hover: var(--color-red-700, #b91c1c);
+}
+
+.c-button--warning {
+  --button-bg: var(--color-warning);
+  --button-bg-hover: var(--color-amber-600);
+}
+
+.c-button--success {
+  --button-bg: var(--color-success);
+  --button-bg-hover: var(--color-green-700);
+}
+
+.c-button--sm {
+  --button-padding-x: var(--spacing-3);
+  --button-padding-y: var(--spacing-1);
+  font-size: var(--font-size-xs);
+}
+
+.c-button--block { width: 100%; }
+
+/* === c-card ============================================================== */
+.c-card {
+  background-color: var(--card-bg);
+  border: 1px solid var(--card-border);
+  border-radius: var(--card-radius);
+  padding: var(--card-padding);
+  box-shadow: var(--card-shadow);
+}
+
+.c-card__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--spacing-3);
+  margin-bottom: var(--spacing-4);
+  padding-bottom: var(--spacing-3);
+  border-bottom: 1px solid var(--color-border);
+}
+
+.c-card__title {
+  font-size: var(--font-size-base);
+  font-weight: var(--font-weight-semibold);
+}
+
+.c-card__body { display: flex; flex-direction: column; gap: var(--spacing-3); }
+
+/* === c-stat-card (KPI) =================================================== */
+.c-stat-card {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-1);
+  padding: var(--spacing-4) var(--spacing-5);
+  background-color: var(--card-bg);
+  border: 1px solid var(--card-border);
+  border-radius: var(--card-radius);
+  box-shadow: var(--card-shadow);
+}
+
+.c-stat-card__label {
+  font-size: var(--font-size-xs);
+  font-weight: var(--font-weight-medium);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--color-text-muted);
+}
+
+.c-stat-card__value {
+  font-size: var(--font-size-2xl);
+  font-weight: var(--font-weight-bold);
+  color: var(--color-text);
+  font-variant-numeric: tabular-nums;
+}
+
+.c-stat-card__hint {
+  font-size: var(--font-size-xs);
+  color: var(--color-text-subtle);
+}
+
+/* Variant destacada (diferencial do produto) */
+.c-stat-card--featured {
+  border-color: var(--color-success);
+  border-width: 2px;
+  background: linear-gradient(135deg, var(--color-success-bg), var(--card-bg));
+}
+.c-stat-card--featured .c-stat-card__value { color: var(--color-success); }
+
+.c-stat-card--danger .c-stat-card__value { color: var(--color-danger); }
+.c-stat-card--warning .c-stat-card__value { color: var(--color-warning); }
+
+/* === c-status-badge ====================================================== */
+/* Usado para status de chaves, tokens, usuários. Modifiers via FuncMap. */
+.c-status-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--spacing-1);
+  padding: 0.125rem var(--spacing-2);
+  border-radius: var(--radius-full);
+  font-size: var(--font-size-xs);
+  font-weight: var(--font-weight-medium);
+  line-height: 1.4;
+  white-space: nowrap;
+}
+
+.c-status-badge::before {
+  content: "";
+  display: inline-block;
+  width: 0.5rem;
+  height: 0.5rem;
+  border-radius: var(--radius-full);
+  background-color: currentColor;
+}
+
+.c-status-badge--success {
+  background-color: var(--color-success-bg);
+  color: var(--color-success);
+}
+.c-status-badge--warning {
+  background-color: var(--color-warning-bg);
+  color: var(--color-warning);
+}
+.c-status-badge--danger {
+  background-color: var(--color-danger-bg);
+  color: var(--color-danger);
+}
+.c-status-badge--neutral {
+  background-color: var(--color-surface-hover);
+  color: var(--color-text-muted);
+}
+
+/* === c-data-table ======================================================== */
+.c-data-table {
+  width: 100%;
+  border: 1px solid var(--color-border);
+  border-radius: var(--card-radius);
+  overflow: hidden;
+  background-color: var(--card-bg);
+}
+
+.c-data-table table { width: 100%; }
+
+.c-data-table thead th {
+  background-color: var(--color-surface-alt);
+  border-bottom: 1px solid var(--color-border);
+  font-size: var(--font-size-xs);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.c-data-table tbody td {
+  border-bottom: 1px solid var(--color-border);
+  font-size: var(--font-size-sm);
+}
+
+.c-data-table tbody tr:last-child td { border-bottom: none; }
+
+.c-data-table tbody tr:hover { background-color: var(--color-surface-hover); }
+
+.c-data-table--striped tbody tr:nth-child(odd) {
+  background-color: var(--color-surface-alt);
+}
+
+/* Wrapper horizontal scroll em telas estreitas */
+.c-data-table__scroll {
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+}
+
+/* === c-form-field ======================================================== */
+.c-form-field {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-1);
+  margin-bottom: var(--spacing-4);
+}
+
+.c-form-field__label {
+  font-weight: var(--font-weight-medium);
+  font-size: var(--font-size-sm);
+  color: var(--color-text-muted);
+}
+
+.c-form-field__hint {
+  font-size: var(--font-size-xs);
+  color: var(--color-text-subtle);
+}
+
+.c-form-field__error {
+  font-size: var(--font-size-xs);
+  color: var(--color-danger);
+  font-weight: var(--font-weight-medium);
+}
+
+.c-form-field--inline {
+  flex-direction: row;
+  align-items: center;
+  gap: var(--spacing-3);
+}
+
+/* === c-modal ============================================================= */
+/* Controlado por Alpine x-show. Overlay fecha com click/ESC. */
+.c-modal {
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: var(--spacing-4);
+  background-color: rgba(0, 0, 0, 0.5);
+}
+
+.c-modal__dialog {
+  width: 100%;
+  max-width: 32rem;
+  max-height: 90vh;
+  overflow-y: auto;
+  background-color: var(--card-bg);
+  border-radius: var(--card-radius);
+  box-shadow: var(--shadow-lg);
+  padding: var(--spacing-6);
+}
+
+.c-modal__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: var(--spacing-4);
+}
+
+.c-modal__title { font-size: var(--font-size-lg); font-weight: var(--font-weight-semibold); }
+
+.c-modal__close {
+  padding: var(--spacing-2);
+  color: var(--color-text-muted);
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  border-radius: var(--radius-sm);
+}
+.c-modal__close:hover { background-color: var(--color-surface-hover); }
+
+.c-modal__footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--spacing-2);
+  margin-top: var(--spacing-5);
+}
+
+/* === c-key-row (tela de chaves — a mais complexa) ======================== */
+.c-key-row {
+  display: grid;
+  grid-template-columns: 1fr auto auto;
+  gap: var(--spacing-3);
+  align-items: center;
+  padding: var(--spacing-3) var(--spacing-4);
+  border-bottom: 1px solid var(--color-border);
+}
+
+.c-key-row:last-child { border-bottom: none; }
+
+.c-key-row__label {
+  font-weight: var(--font-weight-medium);
+  color: var(--color-text);
+}
+
+.c-key-row__provider {
+  font-size: var(--font-size-xs);
+  color: var(--color-text-subtle);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.c-key-row__meta {
+  font-size: var(--font-size-xs);
+  color: var(--color-text-muted);
+  margin-top: 0.125rem;
+}
+
+.c-key-row__actions {
+  display: flex;
+  gap: var(--spacing-2);
+}
+
+/* Estados visuais (4 estados — Frontend §2.6) */
+.c-key-row--enabled { border-left: 3px solid var(--color-success); }
+.c-key-row--manual_disabled { border-left: 3px solid var(--color-text-subtle); opacity: 0.75; }
+.c-key-row--auto_disabled { border-left: 3px solid var(--color-warning); }
+.c-key-row--backoff { border-left: 3px solid var(--color-neutral-accent); }
+
+.c-key-row.is-loading { opacity: 0.5; pointer-events: none; }
+
+/* === c-provider-card ===================================================== */
+.c-provider-card {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-3);
+  padding: var(--spacing-5);
+  background-color: var(--card-bg);
+  border: 1px solid var(--card-border);
+  border-radius: var(--card-radius);
+  box-shadow: var(--card-shadow);
+}
+
+.c-provider-card__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--spacing-2);
+}
+
+.c-provider-card__name {
+  font-size: var(--font-size-lg);
+  font-weight: var(--font-weight-semibold);
+}
+
+.c-provider-card__field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.125rem;
+  font-size: var(--font-size-sm);
+}
+
+.c-provider-card__field-label {
+  font-size: var(--font-size-xs);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--color-text-muted);
+}
+
+.c-provider-card__field-value {
+  color: var(--color-text);
+  font-family: var(--font-family-mono);
+  word-break: break-all;
+}
+
+/* === c-topbar ============================================================ */
+.c-topbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--spacing-4);
+  height: var(--topbar-height);
+  padding: 0 var(--spacing-4);
+  background-color: var(--color-surface);
+  border-bottom: 1px solid var(--color-border);
+  flex-shrink: 0;
+}
+
+.c-topbar__brand {
+  font-size: var(--font-size-base);
+  font-weight: var(--font-weight-bold);
+  color: var(--color-text);
+}
+
+/* Slot de tenant (preparação multi-tenant — vazio/hidden no MVP) */
+.c-topbar__org-selector {
+  display: none; /* vira display:flex quando multi-tenant chegar */
+}
+
+.c-topbar__actions {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-2);
+}
+
+.c-icon-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 2rem;
+  height: 2rem;
+  border-radius: var(--radius-md);
+  color: var(--color-text-muted);
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  transition: background-color var(--transition-fast);
+}
+.c-icon-button:hover { background-color: var(--color-surface-hover); }
+
+/* === c-sidebar =========================================================== */
+.c-sidebar {
+  display: flex;
+  flex-direction: column;
+  background-color: var(--color-sidebar-bg);
+  color: var(--color-sidebar-text);
+  padding: var(--spacing-4) 0;
+}
+
+.c-sidebar__brand {
+  padding: 0 var(--spacing-5) var(--spacing-4);
+  font-size: var(--font-size-base);
+  font-weight: var(--font-weight-bold);
+  color: var(--color-sidebar-text-active);
+  border-bottom: 1px solid var(--color-sidebar-item-hover);
+  margin-bottom: var(--spacing-3);
+}
+
+.c-sidebar__nav { padding: 0 var(--spacing-2); flex: 1; }
+
+.c-sidebar__item {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-3);
+  padding: var(--spacing-2) var(--spacing-3);
+  border-radius: var(--radius-md);
+  color: var(--color-sidebar-text);
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-medium);
+  text-decoration: none;
+  cursor: pointer;
+  transition: background-color var(--transition-fast), color var(--transition-fast);
+}
+
+.c-sidebar__item:hover {
+  background-color: var(--color-sidebar-item-hover);
+  color: var(--color-sidebar-text-active);
+}
+
+.c-sidebar__item.is-active {
+  background-color: var(--color-sidebar-item-active);
+  color: var(--color-sidebar-text-active);
+}
+
+.c-sidebar__section-label {
+  padding: var(--spacing-3) var(--spacing-3) var(--spacing-1);
+  font-size: var(--font-size-xs);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--color-text-subtle);
+  font-weight: var(--font-weight-semibold);
+}
+
+/* === c-user-menu (dropdown Alpine) ======================================= */
+.c-user-menu { position: relative; }
+
+.c-user-menu__trigger {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--spacing-2);
+  padding: var(--spacing-1) var(--spacing-3);
+  border-radius: var(--radius-md);
+  background: transparent;
+  border: 1px solid var(--color-border);
+  color: var(--color-text);
+  font-size: var(--font-size-sm);
+  cursor: pointer;
+}
+.c-user-menu__trigger:hover { background-color: var(--color-surface-hover); }
+
+.c-user-menu__dropdown {
+  position: absolute;
+  top: calc(100% + 0.25rem);
+  right: 0;
+  min-width: 12rem;
+  background-color: var(--card-bg);
+  border: 1px solid var(--color-border);
+  border-radius: var(--card-radius);
+  box-shadow: var(--shadow-lg);
+  padding: var(--spacing-2);
+  z-index: 50;
+}
+
+.c-user-menu__item {
+  display: block;
+  width: 100%;
+  padding: var(--spacing-2) var(--spacing-3);
+  border-radius: var(--radius-sm);
+  color: var(--color-text);
+  font-size: var(--font-size-sm);
+  text-decoration: none;
+  text-align: left;
+  background: transparent;
+  border: none;
+  cursor: pointer;
+}
+.c-user-menu__item:hover { background-color: var(--color-surface-hover); }
+.c-user-menu__item--danger { color: var(--color-danger); }
+.c-user-menu__divider {
+  height: 1px;
+  background-color: var(--color-border);
+  margin: var(--spacing-1) 0;
+}
+
+/* === c-toast (notificações HTMX via HX-Trigger) ========================== */
+.c-toast-container {
+  position: fixed;
+  bottom: var(--spacing-4);
+  right: var(--spacing-4);
+  z-index: 200;
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-2);
+  max-width: calc(100vw - 2rem);
+}
+
+.c-toast {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--spacing-3);
+  padding: var(--spacing-3) var(--spacing-4);
+  background-color: var(--card-bg);
+  border: 1px solid var(--color-border);
+  border-left-width: 4px;
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-lg);
+  min-width: 16rem;
+  max-width: 24rem;
+}
+
+.c-toast--success { border-left-color: var(--color-success); }
+.c-toast--warning { border-left-color: var(--color-warning); }
+.c-toast--danger  { border-left-color: var(--color-danger); }
+
+.c-toast__title { font-weight: var(--font-weight-semibold); font-size: var(--font-size-sm); }
+.c-toast__message { font-size: var(--font-size-sm); color: var(--color-text-muted); margin-top: 0.125rem; }
+
+/* === c-tabs (Alpine controlado) ========================================== */
+.c-tabs { display: flex; gap: var(--spacing-1); border-bottom: 1px solid var(--color-border); }
+
+.c-tabs__item {
+  padding: var(--spacing-2) var(--spacing-4);
+  background: transparent;
+  border: none;
+  border-bottom: 2px solid transparent;
+  color: var(--color-text-muted);
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-medium);
+  cursor: pointer;
+  margin-bottom: -1px;
+}
+.c-tabs__item:hover { color: var(--color-text); }
+.c-tabs__item.is-active {
+  color: var(--color-primary);
+  border-bottom-color: var(--color-primary);
+}
+
+/* === c-login-form ======================================================== */
+.c-login-form {
+  width: 100%;
+  max-width: 24rem;
+  margin: var(--spacing-16) auto;
+  padding: var(--spacing-8) var(--spacing-6);
+  background-color: var(--card-bg);
+  border: 1px solid var(--card-border);
+  border-radius: var(--card-radius);
+  box-shadow: var(--shadow-md);
+}
+
+.c-login-form__title {
+  font-size: var(--font-size-xl);
+  font-weight: var(--font-weight-bold);
+  text-align: center;
+  margin-bottom: var(--spacing-2);
+}
+
+.c-login-form__subtitle {
+  font-size: var(--font-size-sm);
+  color: var(--color-text-muted);
+  text-align: center;
+  margin-bottom: var(--spacing-6);
+}
+
+.c-login-form__alt {
+  margin-top: var(--spacing-6);
+  padding-top: var(--spacing-4);
+  border-top: 1px solid var(--color-border);
+  text-align: center;
+  font-size: var(--font-size-sm);
+  color: var(--color-text-muted);
+}
+
+/* === c-empty-state / c-error-state ======================================= */
+.c-empty-state,
+.c-error-state {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: var(--spacing-3);
+  padding: var(--spacing-12) var(--spacing-6);
+  text-align: center;
+  color: var(--color-text-muted);
+}
+
+.c-empty-state__title,
+.c-error-state__title {
+  font-size: var(--font-size-lg);
+  font-weight: var(--font-weight-semibold);
+  color: var(--color-text);
+}
+
+.c-error-state { color: var(--color-danger); }
+
+/* === c-token-display ===================================================== */
+.c-token-display {
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-sm);
+  background-color: var(--color-surface-alt);
+  padding: var(--spacing-2) var(--spacing-3);
+  border-radius: var(--radius-md);
+  word-break: break-all;
+}
+
+.c-token-display--full {
+  background-color: var(--color-warning-bg);
+  border: 1px solid var(--color-warning);
+}
+
+.c-token-display__copy-btn {
+  margin-left: var(--spacing-2);
+  padding: 0.125rem var(--spacing-2);
+  font-size: var(--font-size-xs);
+}
+
+/* === c-chart-card (wrapper para ECharts) ================================= */
+.c-chart-card {
+  background-color: var(--card-bg);
+  border: 1px solid var(--card-border);
+  border-radius: var(--card-radius);
+  padding: var(--spacing-5);
+  box-shadow: var(--card-shadow);
+}
+
+.c-chart-card__title {
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-semibold);
+  color: var(--color-text-muted);
+  margin-bottom: var(--spacing-4);
+}
+
+.c-chart-card__canvas {
+  width: 100%;
+  height: 18rem;
+  min-height: 12rem;
+}

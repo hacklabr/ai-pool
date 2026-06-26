@@ -1,0 +1,45 @@
+{{/* ConfigMap com configuração NÃO-SENSÍVEL da aplicação.
+     Tudo aqui pode ir em Git/values.yaml sem risco.
+     Secrets (DATABASE_URL, KEK, pepper) ficam em Secret K8s (ver secret.yaml/externalsecret.yaml).
+*/}}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "ai-pool.configMapName" . }}
+  labels:
+    {{- include "ai-pool.commonLabels" . | nindent 4 }}
+data:
+  # HTTP
+  HTTP_ADDR: {{ .Values.app.httpAddr | quote }}
+  HTTP_READ_HEADER_TIMEOUT: {{ .Values.app.httpReadHeaderTimeout | quote }}
+
+  # Modo produção
+  DEV_MODE: {{ .Values.app.devMode | quote }}
+  SSRF_ALLOW_HTTP: {{ .Values.app.ssrfAllowHTTP | quote }}
+
+  # Observabilidade
+  LOG_LEVEL: {{ .Values.app.logLevel | quote }}
+  LOG_FORMAT: {{ .Values.app.logFormat | quote }}
+
+  # Defaults de afinidade/rate-limit
+  AFFINITY_TTL: {{ .Values.app.affinityTTL | quote }}
+  AFFINITY_MAX_PER_USER: {{ .Values.app.affinityMaxPerUser | quote }}
+  RATE_LIMIT_BURST: {{ .Values.app.rateLimitBurst | quote }}
+  RATE_LIMIT_PER_MIN: {{ .Values.app.rateLimitPerMin | quote }}
+  DEFAULT_ORG_ID: {{ .Values.app.defaultOrgID | quote }}
+
+  # Graceful shutdown
+  SHUTDOWN_TIMEOUT: {{ .Values.app.shutdownTimeout | quote }}
+  PRESTOP_SLEEP: {{ .Values.app.preStopSleep | quote }}
+
+  # Feature flags
+  ENABLE_METRICS: {{ .Values.app.enableMetrics | quote }}
+
+  # DB pool config (DSN vem de Secret; aqui apenas tuning do pool)
+  DB_MAX_CONNS: {{ .Values.database.maxConns | quote }}
+  DB_MIN_CONNS: {{ .Values.database.minConns | quote }}
+  DB_CONN_MAX_LIFETIME: {{ .Values.database.connMaxLifetime | quote }}
+
+  # Paths dos segredos (montados via Secret volume em deployment.yaml)
+  KEK_PATH: {{ .Values.app.kekPath | quote }}
+  TOKEN_PEPPER_PATH: {{ .Values.app.tokenPepperPath | quote }}

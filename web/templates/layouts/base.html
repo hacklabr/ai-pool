@@ -1,0 +1,37 @@
+{{define "layouts/base.html"}}<!doctype html>
+<html lang="pt-BR" x-data="{ theme: localStorage.getItem('aipp-theme') || 'light' }" x-init="$watch('theme', v => { localStorage.setItem('aipp-theme', v); document.documentElement.dataset.theme = v })" :data-theme="theme">
+<head>
+  {{template "partials/head.html" .}}
+</head>
+<body>
+  {{if .User}}
+    <div class="o-layout" x-data="{ sidebarOpen: false }">
+      {{template "partials/sidebar.html" .}}
+      <div class="o-layout__main">
+        {{template "partials/topbar.html" .}}
+        <main class="o-container u-my-6" id="main-content">
+          {{block "page-content" .}}{{end}}
+        </main>
+      </div>
+    </div>
+  {{else}}
+    <main>
+      {{block "page-content" .}}{{end}}
+    </main>
+  {{end}}
+
+  {{/* Container global para toasts HTMX (HX-Trigger events) */}}
+  <div class="c-toast-container" x-data="{ toasts: [] }"
+       @show-toast.window="toasts.push($event.detail); setTimeout(() => toasts.shift(), 5000)"
+       @htmx:responseError.window="toasts.push({type:'warning', title:'Erro de rede', message:'Verifique sua conexão'})">
+    <template x-for="(t, i) in toasts" :key="i">
+      <div :class="'c-toast c-toast--' + (t.type || 'neutral')" role="status" aria-live="polite">
+        <div>
+          <div class="c-toast__title" x-text="t.title"></div>
+          <div class="c-toast__message" x-text="t.message"></div>
+        </div>
+      </div>
+    </template>
+  </div>
+</body>
+</html>{{end}}

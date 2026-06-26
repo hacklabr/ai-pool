@@ -1,0 +1,148 @@
+{{define "pages/audit.html"}}{{template "layouts/base.html" .}}{{end}}
+
+{{define "page-content"}}{{$c := .Content}}<div class="o-stack u-my-6" x-data="auditPage()">
+  <div class="o-page-header">
+    <div>
+      <h1>Auditoria</h1>
+      <p class="u-text-muted u-text-sm">Log append-only de eventos. {{$c.Total}} entradas no total.</p>
+    </div>
+  </div>
+
+  {{/* Filtros */}}
+  <form class="c-card" @submit.prevent="load(0)">
+    <div class="o-cluster">
+      <div class="c-form-field c-form-field--inline">
+        <label for="filter-action">Ação</label>
+        <select id="filter-action" x-model="filterAction" @change="load(0)">
+          <option value="">todas</option>
+          <option value="user.create">user.create</option>
+          <option value="user.update">user.update</option>
+          <option value="user.disable">user.disable</option>
+          <option value="provider.create">provider.create</option>
+          <option value="provider_key.disable">provider_key.disable</option>
+          <option value="provider_key.enable">provider_key.enable</option>
+          <option value="api_token.create">api_token.create</option>
+          <option value="api_token.revoke">api_token.revoke</option>
+        </select>
+      </div>
+      <div class="c-form-field c-form-field--inline">
+        <label for="filter-entity">Tipo entidade</label>
+        <select id="filter-entity" x-model="filterEntity" @change="load(0)">
+          <option value="">todos</option>
+          <option value="user">user</option>
+          <option value="provider">provider</option>
+          <option value="provider_key">provider_key</option>
+          <option value="api_token">api_token</option>
+        </select>
+      </div>
+      <button type="submit" class="c-button c-button--ghost c-button--sm">Aplicar</button>
+    </div>
+  </form>
+
+  {{/* Tabela de auditoria (read-only) */}}
+  <div class="c-data-table__scroll" x-show="!loading">
+    <div class="c-data-table">
+      <table>
+        <thead>
+          <tr>
+            <th scope="col">Quando</th>
+            <th scope="col">Ator</th>
+            <th scope="col">Ação</th>
+            <th scope="col">Entidade</th>
+            <th scope="col">IP</th>
+            <th scope="col"><span class="u-hidden">Detalhes</span></th>
+          </tr>
+        </thead>
+        <tbody>
+          {{/* Primeira página é server-rendered; próximas via HTMX */}}
+          {{range $e := $c.Entries}}
+            <tr>
+              <td class="u-text-sm">{{fmtTime $e.CreatedAt}}<br><span class="u-text-subtle">{{fmtTimeRel $e.CreatedAt}}</span></td>
+              <td>{{$e.ActorName}}</td>
+              <td><code class="u-text-sm">{{$e.Action}}</code></td>
+              <td class="u-text-sm">{{$e.EntityType}}{{if $e.EntityID}} #{{$e.EntityID}}{{end}}</td>
+              <td class="u-text-sm u-text-muted">{{$e.IP}}</td>
+              <td>
+                {{if $e.Metadata}}
+                  <button class="c-button c-button--ghost c-button--sm"
+                          @click="selectedMetadata = {{jsonIndent (printf `%s` $e.Metadata)}}; $dispatch('open-modal', {id: 'modal-metadata'})">
+                    Ver
+                  </button>
+                {{end}}
+              </td>
+            </tr>
+          {{end}}
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  {{/* Estado vazio */}}
+  <div class="c-empty-state" x-show="!loading && entries.length === 0 && {{$c.Total}} === 0" x-cloak>
+    <h3 class="c-empty-state__title">Nenhum evento</h3>
+    <p class="u-text-muted">Eventos de auditoria aparecerão aqui conforme ações administrativas forem realizadas.</p>
+  </div>
+
+  {{/* Paginação */}}
+  {{if gt $c.Total $c.Limit}}
+    <div class="o-cluster o-cluster--between">
+      <span class="u-text-sm u-text-muted">
+        Mostrando 1–{{len $c.Entries}} de {{$c.Total}}
+      </span>
+      <div class="o-cluster">
+        <button class="c-button c-button--ghost c-button--sm" disabled>← Anterior</button>
+        <button class="c-button c-button--ghost c-button--sm"
+                @click="load({{$c.Limit}})">
+          Próxima →
+        </button>
+      </div>
+    </div>
+  {{end}}
+</div>
+
+{{/* Modal: detalhes do metadata (JSONB) */}}
+<div class="c-modal" x-data="{ selectedMetadata: '' }"
+     x-show="$store.modals.open === 'modal-metadata'" x-cloak
+     @keydown.escape.window="$store.modals.close()"
+     @click.self="$store.modals.close()" role="dialog" aria-modal="true" aria-labelledby="modal-metadata-title">
+  <div class="c-modal__dialog">
+    <div class="c-modal__header">
+      <h2 class="c-modal__title" id="modal-metadata-title">Detalhes do evento</h2>
+      <button class="c-modal__close" aria-label="Fechar" @click="$store.modals.close()">✕</button>
+    </div>
+    <pre x-text="selectedMetadata" class="u-text-sm" style="max-height: 60vh; overflow: auto;"></pre>
+  </div>
+</div>
+
+<script>
+function auditPage() {
+  return {
+    filterAction: '',
+    filterEntity: '',
+    loading: false,
+    entries: [],
+    async load(offset) {
+      this.loading = true;
+      const params = new URLSearchParams();
+      if (this.filterAction) params.set('action', this.filterAction);
+      if (this.filterEntity) params.set('entity_type', this.filterEntity);
+      params.set('offset', offset || 0);
+      params.set('limit', 50);
+      try {
+        const r = await fetch('/api/web/admin/audit?' + params, { credentials: 'same-origin' });
+        if (r.ok) {
+          const data = await r.json();
+          // TODO: renderizar linhas via template Alpine (refinamento futuro).
+          // Por enquanto, apenas reload da página com query string.
+          const url = new URL(location.href);
+          if (this.filterAction) url.searchParams.set('action', this.filterAction);
+          if (this.filterEntity) url.searchParams.set('entity_type', this.filterEntity);
+          location.href = url.toString();
+        }
+      } finally {
+        this.loading = false;
+      }
+    }
+  };
+}
+</script>{{end}}

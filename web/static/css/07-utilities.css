@@ -1,0 +1,87 @@
+/* =============================================================================
+ * ITCSS Layer 07 — Utilities (single-rule overrides).
+ *
+ * Cada utility faz UMA coisa (single responsibility) e DEVE poder vencer de
+ * qualquer componente (especificidade 0,0,1,0 = classe única; ordem de carga
+ * = última = vence em empate). Sem !important aqui — reservado para casos
+ * extremos documentados.
+ *
+ * Naming: prefixo `u-`.
+ * ============================================================================= */
+
+/* Display */
+.u-hidden { display: none !important; }
+.u-block  { display: block; }
+.u-inline { display: inline; }
+.u-flex   { display: flex; }
+.u-inline-flex { display: inline-flex; }
+.u-grid   { display: grid; }
+
+/* Texto */
+.u-text-center  { text-align: center; }
+.u-text-left    { text-align: left; }
+.u-text-right   { text-align: right; }
+.u-text-muted   { color: var(--color-text-muted); }
+.u-text-subtle  { color: var(--color-text-subtle); }
+.u-text-danger  { color: var(--color-danger); }
+.u-text-success { color: var(--color-success); }
+.u-text-warning { color: var(--color-warning); }
+.u-text-mono    { font-family: var(--font-family-mono); }
+.u-text-sm      { font-size: var(--font-size-sm); }
+.u-text-xs      { font-size: var(--font-size-xs); }
+.u-text-lg      { font-size: var(--font-size-lg); }
+.u-text-bold    { font-weight: var(--font-weight-bold); }
+.u-text-medium  { font-weight: var(--font-weight-medium); }
+.u-text-normal  { font-weight: var(--font-weight-normal); }
+
+/* Espaçamento (margin/padding) — geradas conforme uso. Padrão: u-{m|p}{t|r|b|l|x|y}-{n} */
+.u-mt-1 { margin-top: var(--spacing-1); }
+.u-mt-2 { margin-top: var(--spacing-2); }
+.u-mt-3 { margin-top: var(--spacing-3); }
+.u-mt-4 { margin-top: var(--spacing-4); }
+.u-mt-6 { margin-top: var(--spacing-6); }
+
+.u-mb-1 { margin-bottom: var(--spacing-1); }
+.u-mb-2 { margin-bottom: var(--spacing-2); }
+.u-mb-3 { margin-bottom: var(--spacing-3); }
+.u-mb-4 { margin-bottom: var(--spacing-4); }
+.u-mb-6 { margin-bottom: var(--spacing-6); }
+
+.u-my-4 { margin-top: var(--spacing-4); margin-bottom: var(--spacing-4); }
+.u-my-6 { margin-top: var(--spacing-6); margin-bottom: var(--spacing-6); }
+
+.u-p-2 { padding: var(--spacing-2); }
+.u-p-3 { padding: var(--spacing-3); }
+.u-p-4 { padding: var(--spacing-4); }
+.u-p-6 { padding: var(--spacing-6); }
+
+/* Largura */
+.u-w-full { width: 100%; }
+.u-w-auto { width: auto; }
+.u-max-w-prose { max-width: 65ch; }
+
+/* Overflow */
+.u-overflow-auto { overflow: auto; }
+.u-overflow-hidden { overflow: hidden; }
+
+/* Visibilidade responsiva (mobile-first). Use com cuidado. */
+@media (max-width: 48rem) {
+  .u-hidden-mobile { display: none !important; }
+}
+@media (min-width: 48rem) {
+  .u-hidden-desktop { display: none !important; }
+}
+
+/* Gap helpers para flex/grid */
+.u-gap-1 { gap: var(--spacing-1); }
+.u-gap-2 { gap: var(--spacing-2); }
+.u-gap-3 { gap: var(--spacing-3); }
+.u-gap-4 { gap: var(--spacing-4); }
+
+/* Cursor */
+.u-cursor-pointer { cursor: pointer; }
+.u-cursor-not-allowed { cursor: not-allowed; }
+
+/* Word-break (para tokens, URLs) */
+.u-break-all { word-break: break-all; }
+.u-break-word { overflow-wrap: break-word; }

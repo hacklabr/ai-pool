@@ -1,0 +1,89 @@
+{{define "pages/providers.html"}}{{template "layouts/base.html" .}}{{end}}
+
+{{define "page-content"}}{{$c := .Content}}<div class="o-stack u-my-6">
+  <div class="o-page-header">
+    <div>
+      <h1>Provedores</h1>
+      <p class="u-text-muted u-text-sm">Provedores de LLM cadastrados.</p>
+    </div>
+    <button class="c-button" @click="$dispatch('open-modal', {id: 'modal-new-provider'})">
+      + Novo provedor
+    </button>
+  </div>
+
+  {{if $c.Providers}}
+    <div class="o-grid">
+      {{range $p := $c.Providers}}
+        <div class="c-provider-card">
+          <div class="c-provider-card__header">
+            <h3 class="c-provider-card__name">{{$p.Name}}</h3>
+            <span class="c-status-badge c-status-badge--success">ativo</span>
+          </div>
+          <div class="c-provider-card__field">
+            <span class="c-provider-card__field-label">Slug</span>
+            <span class="c-provider-card__field-value">{{$p.Slug}}</span>
+          </div>
+          <div class="c-provider-card__field">
+            <span class="c-provider-card__field-label">Base URL</span>
+            <span class="c-provider-card__field-value">{{$p.BaseURL}}</span>
+          </div>
+          <div class="c-provider-card__field">
+            <span class="c-provider-card__field-label">API Spec</span>
+            <span class="c-provider-card__field-value">{{$p.APISpec}}</span>
+          </div>
+          <div class="c-provider-card__field">
+            <span class="c-provider-card__field-label">User-Agent Override</span>
+            <span class="c-provider-card__field-value">
+              {{if $p.UserAgentOverride}}{{$p.UserAgentOverride}}{{else}}<span class="u-text-subtle">(default do provedor)</span>{{end}}
+            </span>
+          </div>
+        </div>
+      {{end}}
+    </div>
+  {{else}}
+    <div class="c-empty-state">
+      <h3 class="c-empty-state__title">Nenhum provedor cadastrado</h3>
+      <p class="u-text-muted">Cadastre provedores para habilitar o roteamento.</p>
+    </div>
+  {{end}}
+</div>
+
+{{/* Modal: novo provedor */}}
+<div class="c-modal" x-show="$store.modals.open === 'modal-new-provider'" x-cloak
+     @keydown.escape.window="$store.modals.close()"
+     @click.self="$store.modals.close()" role="dialog" aria-modal="true" aria-labelledby="modal-new-provider-title">
+  <div class="c-modal__dialog">
+    <div class="c-modal__header">
+      <h2 class="c-modal__title" id="modal-new-provider-title">Novo provedor</h2>
+      <button class="c-modal__close" aria-label="Fechar" @click="$store.modals.close()">✕</button>
+    </div>
+    <form hx-post="/api/web/admin/providers"
+          hx-headers='{"X-CSRF-Token": "{{.CSRFToken}}"}'
+          hx-on::after-request="if(event.detail.successful) location.reload()">
+      <div class="c-form-field">
+        <label for="new-prov-name">Nome</label>
+        <input id="new-prov-name" name="name" type="text" required placeholder="DeepSeek">
+      </div>
+      <div class="c-form-field">
+        <label for="new-prov-slug">Slug</label>
+        <input id="new-prov-slug" name="slug" type="text" required pattern="[a-z0-9-]+"
+               placeholder="deepseek">
+      </div>
+      <div class="c-form-field">
+        <label for="new-prov-url">Base URL</label>
+        <input id="new-prov-url" name="base_url" type="url" required
+               placeholder="https://api.deepseek.com/v1">
+        <p class="c-form-field__hint">Deve ser HTTPS. IPs internos/loopback são bloqueados (SSRF guard).</p>
+      </div>
+      <div class="c-form-field">
+        <label for="new-prov-ua">User-Agent Override (opcional)</label>
+        <input id="new-prov-ua" name="user_agent_override" type="text"
+               placeholder="MyApp/1.0">
+      </div>
+      <div class="c-modal__footer">
+        <button type="button" class="c-button c-button--ghost" @click="$store.modals.close()">Cancelar</button>
+        <button type="submit" class="c-button">Criar</button>
+      </div>
+    </form>
+  </div>
+</div>{{end}}

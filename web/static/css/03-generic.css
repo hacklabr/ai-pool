@@ -1,0 +1,113 @@
+/* =============================================================================
+ * ITCSS Layer 03 — Generic (reset + box-sizing).
+ *
+ * Reset minimalista baseado em modern-normalize. Foco em:
+ *   - Box-sizing border-box universal (evita surpresas de width).
+ *   - Margens zeradas (cada componente define as suas).
+ *   - Lists, headings, links sem estilo padrão (componentes decidem).
+ * ============================================================================= */
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+* {
+  margin: 0;
+  padding: 0;
+}
+
+html {
+  -webkit-text-size-adjust: 100%;
+  text-size-adjust: 100%;
+  -moz-tab-size: 4;
+  tab-size: 4;
+}
+
+body {
+  min-height: 100vh;
+  line-height: var(--line-height-normal);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  text-rendering: optimizeLegibility;
+}
+
+/* Remove list styles (componentes decidem quando usar bullets) */
+ul,
+ol {
+  list-style: none;
+}
+
+/* Headings herdam tamanho/peso — componentes definem quando preciso */
+h1, h2, h3, h4, h5, h6 {
+  font-size: inherit;
+  font-weight: inherit;
+}
+
+/* Links sem decoração por padrão */
+a {
+  color: inherit;
+  text-decoration: none;
+}
+
+/* Imagens responsivas por padrão */
+img,
+picture,
+svg,
+video,
+canvas {
+  display: block;
+  max-width: 100%;
+}
+
+/* Inputs/buttons herdam font-family (evita serif em form controls) */
+input,
+button,
+textarea,
+select {
+  font: inherit;
+  color: inherit;
+}
+
+/* Botões resetam estilo default */
+button {
+  background: none;
+  border: none;
+  cursor: pointer;
+}
+
+/* Tabelas com border-collapse (componente c-data-table refina) */
+table {
+  border-collapse: collapse;
+  border-spacing: 0;
+}
+
+/* Esconde elementos com aria-hidden sem afetar leitores de tela além do necessário */
+[hidden] {
+  display: none !important;
+}
+
+/* Foco visível acessível (WCAG 2.4.7) — pode ser refinado por componente */
+:focus-visible {
+  outline: 2px solid var(--color-primary);
+  outline-offset: 2px;
+}
+
+/* Respeita prefers-reduced-motion (acessibilidade cognitiva) */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+/* x-cloak (Alpine.js): esconde elementos até o Alpine inicializar.
+ * Previne flash de conteúdo não-inicializado (FOUC) em dropdowns/modais. */
+[x-cloak] {
+  display: none !important;
+}

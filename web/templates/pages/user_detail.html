@@ -1,0 +1,126 @@
+{{define "pages/user_detail.html"}}{{template "layouts/base.html" .}}{{end}}
+
+{{define "page-content"}}{{$c := .Content}}{{$u := $c.User}}<div class="o-stack u-my-6">
+  <div class="o-page-header">
+    <div>
+      <h1>{{$u.Username}}</h1>
+      <p class="u-text-muted u-text-sm">
+        <strong>{{printf "%v" $u.Role}}</strong> ·
+        <span class="c-status-badge {{userStatusClass (printf "%v" $u.Status)}}">{{userStatusLabel (printf "%v" $u.Status)}}</span>
+        · desde {{$u.CreatedAt.Format "02/01/2006"}}
+      </p>
+    </div>
+    <a href="/web/admin/users" class="c-button c-button--ghost">← Voltar</a>
+  </div>
+
+  {{/* === Resumo de consumo (7 dias) === */}}
+  <h2 class="u-mt-2">Consumo — últimos 7 dias</h2>
+  <div class="o-grid o-grid--stats">
+    <div class="c-stat-card">
+      <span class="c-stat-card__label">Requisições</span>
+      <span class="c-stat-card__value">{{fmtNumber $c.Totals.RequestCount}}</span>
+    </div>
+    <div class="c-stat-card">
+      <span class="c-stat-card__label">Tokens consumidos</span>
+      <span class="c-stat-card__value">{{fmtNumber $c.Totals.TotalTokens}}</span>
+    </div>
+    <div class="c-stat-card">
+      <span class="c-stat-card__label">Tokens não cacheados</span>
+      <span class="c-stat-card__value">{{fmtNumber $c.Totals.NonCachedTokens}}</span>
+    </div>
+    <div class="c-stat-card c-stat-card--featured">
+      <span class="c-stat-card__label">Tokens economizados</span>
+      <span class="c-stat-card__value">{{fmtNumber $c.Totals.CachedTokens}}</span>
+      <span class="c-stat-card__hint">via cache de contexto</span>
+    </div>
+    <div class="c-stat-card {{if gt $c.Totals.ErrorCount 0}}c-stat-card--danger{{end}}">
+      <span class="c-stat-card__label">Erros</span>
+      <span class="c-stat-card__value">{{fmtNumber $c.Totals.ErrorCount}}</span>
+    </div>
+  </div>
+
+  {{/* === Gráfico horário (24h) === */}}
+  <div class="c-chart-card">
+    <h3 class="c-chart-card__title">Utilização por hora — últimas 24h</h3>
+    <div id="user-hourly-chart" class="c-chart-card__canvas"></div>
+  </div>
+
+  {{/* === Quebra por chave === */}}
+  <div class="c-card">
+    <div class="c-card__body">
+      <h3 class="c-card__title u-mb-2">Uso por chave (7 dias)</h3>
+      {{if $c.KeyUsage}}
+        <div class="c-data-table">
+          <table>
+            <thead>
+              <tr>
+                <th>Chave</th><th>Requisições</th><th>Tokens consumidos</th>
+                <th>Não cacheados</th><th>Em cache</th><th>Erros</th>
+              </tr>
+            </thead>
+            <tbody>
+              {{range $k := $c.KeyUsage}}
+                <tr>
+                  <td>{{$k.Label}} <span class="u-text-subtle">#{{$k.KeyID}}</span></td>
+                  <td>{{fmtNumber $k.RequestCount}}</td>
+                  <td>{{fmtNumber $k.TotalTokens}}</td>
+                  <td>{{fmtNumber $k.NonCachedTokens}}</td>
+                  <td>{{fmtNumber $k.CachedTokens}}</td>
+                  <td>{{fmtNumber $k.ErrorCount}}</td>
+                </tr>
+              {{end}}
+            </tbody>
+          </table>
+        </div>
+      {{else}}
+        <p class="u-text-muted">Sem uso registrado para este usuário no período.</p>
+      {{end}}
+    </div>
+  </div>
+
+  {{/* === Alterar senha === */}}
+  <div class="c-card">
+    <div class="c-card__body">
+      <h3 class="c-card__title u-mb-2">Alterar senha</h3>
+      <form class="o-cluster" hx-post="/api/web/admin/users/{{$u.ID}}/password"
+            hx-headers='{"X-CSRF-Token": "{{.CSRFToken}}"}'
+            hx-on::after-request="if(event.detail.successful){alert('Senha alterada')}else{alert('Falha ('+event.detail.xhr.status+')')}">
+        <div class="c-form-field">
+          <label for="new-pass">Nova senha</label>
+          <input id="new-pass" name="password" type="password" required minlength="8" autocomplete="new-password" placeholder="mínimo 8 caracteres">
+        </div>
+        <button type="submit" class="c-button">Salvar senha</button>
+      </form>
+    </div>
+  </div>
+</div>
+
+<script id="user-hourly-data" type="application/json">[{{range $i, $h := $c.Hourly}}{{if $i}},{{end}}{{$h.BucketHour.Unix}}000,{{$h.RequestCount}},{{$h.TotalTokens}},{{$h.CachedTokens}}{{end}}]</script>
+<script src="https://cdn.jsdelivr.net/npm/echarts@5.5.1/dist/echarts.min.js"
+        integrity="sha384-Mx5lkUEQPM1pOJCwFtUICyX45KNojXbkWdYhkKUKsbv391mavbfoAmONbzkgYPzR"
+        crossorigin="anonymous"></script>
+<script>
+(function() {
+  if (!window.echarts) return;
+  const el = document.getElementById('user-hourly-chart');
+  if (!el) return;
+  const raw = JSON.parse((document.getElementById('user-hourly-data') || {}).textContent || '[]');
+  const chart = echarts.init(el);
+  const cats = raw.map(r => new Date(r[0]).toLocaleString('pt-BR', {day:'2-digit',month:'2-digit',hour:'2-digit',minute:'2-digit'}));
+  chart.setOption({
+    tooltip: { trigger: 'axis' },
+    grid: { left: 50, right: 20, top: 30, bottom: 60 },
+    xAxis: { type: 'category', data: cats, axisLabel: { rotate: 45, fontSize: 10 } },
+    yAxis: [
+      { type: 'value', name: 'Requisições' },
+      { type: 'value', name: 'Tokens' }
+    ],
+    series: [
+      { name: 'Requisições', type: 'bar', data: raw.map(r => r[1]) },
+      { name: 'Tokens consumidos', type: 'line', yAxisIndex: 1, smooth: true, data: raw.map(r => r[2]) }
+    ],
+    legend: { top: 0 }
+  });
+  window.addEventListener('resize', () => chart.resize());
+})();
+</script>{{end}}

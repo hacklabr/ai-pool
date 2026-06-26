@@ -1,0 +1,21 @@
+/* =============================================================================
+ * main.css — ponto de entrada do CSS do AI Provider Pool.
+ *
+ * Importa as 7 camadas ITCSS EM ORDEM (specificity crescente). Carregado
+ * pelo template base.html via <link rel="stylesheet" href="/static/css/main.css">.
+ *
+ * Servido pelo embed.FS (web/static/css/*) via http.FileServer no admin App.
+ *
+ * Para alterar a UI:
+ *   - Tokens (cores, espaçamentos, dark mode): 01-settings.css
+ *   - Componentes novos: 06-components.css
+ *   - Override pontual: 07-utilities.css
+ * ============================================================================= */
+
+@import url("01-settings.css");
+@import url("02-tools.css");
+@import url("03-generic.css");
+@import url("04-elements.css");
+@import url("05-objects.css");
+@import url("06-components.css");
+@import url("07-utilities.css");

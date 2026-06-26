@@ -1,0 +1,148 @@
+{{define "pages/dashboard.html"}}{{template "layouts/base.html" .}}{{end}}
+
+{{define "page-content"}}{{$c := .Content}}<div class="o-stack u-my-6">
+  <div class="o-page-header">
+    <div>
+      <h1>Dashboard</h1>
+      <p class="u-text-muted u-text-sm">Período: {{$c.From.Format "02/01/2006"}} — {{$c.To.Format "02/01/2006"}}</p>
+    </div>
+  </div>
+
+  {{/* === KPI Cards === */}}
+  <div class="o-grid o-grid--stats">
+    {{with $c.Totals}}
+      <div class="c-stat-card">
+        <span class="c-stat-card__label">Requisições</span>
+        <span class="c-stat-card__value">{{fmtNumber .RequestCount}}</span>
+        <span class="c-stat-card__hint">no período</span>
+      </div>
+
+      {{/* KPI DESTACADO: tokens economizados por cache de contexto (diferencial do produto) */}}
+      <div class="c-stat-card c-stat-card--featured">
+        <span class="c-stat-card__label">Tokens economizados (cache)</span>
+        <span class="c-stat-card__value">{{fmtNumber .CachedTokens}}</span>
+        <span class="c-stat-card__hint">↑ via afinidade de cache de contexto</span>
+      </div>
+
+      <div class="c-stat-card">
+        <span class="c-stat-card__label">Tokens consumidos</span>
+        <span class="c-stat-card__value">{{fmtNumber .TotalTokens}}</span>
+        <span class="c-stat-card__hint">prompt + completion</span>
+      </div>
+
+      <div class="c-stat-card {{if gt .ErrorCount 0}}c-stat-card--danger{{end}}">
+        <span class="c-stat-card__label">Erros</span>
+        <span class="c-stat-card__value">{{fmtNumber .ErrorCount}}</span>
+        <span class="c-stat-card__hint">status ≥ 400</span>
+      </div>
+    {{else}}
+      <p class="u-text-muted">Dados indisponíveis no momento.</p>
+    {{end}}
+  </div>
+
+  {{/* === Gráficos ECharts === */}}
+  <div class="o-grid">
+    {{/* Utilização por usuário (bar horizontal) */}}
+    <div class="c-chart-card" style="grid-column: span 2;">
+      <h3 class="c-chart-card__title">Utilização por usuário</h3>
+      <div id="chart-by-user" class="c-chart-card__canvas"
+           x-data="echartsInit({
+             url: '/api/web/admin/dashboard?group_by=user&from={{$c.From.Format "2006-01-02T15:04:05Z07:00"}}&to={{$c.To.Format "2006-01-02T15:04:05Z07:00"}}',
+             metric: 'total_tokens',
+             type: 'bar',
+             orient: 'horizontal'
+           })"
+           x-init="loadChart($el, $wire)"></div>
+    </div>
+
+    {{/* Distribuição por provedor (donut) */}}
+    <div class="c-chart-card">
+      <h3 class="c-chart-card__title">Por provedor</h3>
+      <div id="chart-by-provider" class="c-chart-card__canvas"
+           x-data="echartsInit({
+             url: '/api/web/admin/dashboard?group_by=provider&from={{$c.From.Format "2006-01-02T15:04:05Z07:00"}}&to={{$c.To.Format "2006-01-02T15:04:05Z07:00"}}',
+             metric: 'total_tokens',
+             type: 'pie'
+           })"
+           x-init="loadChart($el, $wire)"></div>
+    </div>
+
+    {{/* Por modelo (bar vertical) */}}
+    <div class="c-chart-card">
+      <h3 class="c-chart-card__title">Top modelos</h3>
+      <div id="chart-by-model" class="c-chart-card__canvas"
+           x-data="echartsInit({
+             url: '/api/web/admin/dashboard?group_by=model&from={{$c.From.Format "2006-01-02T15:04:05Z07:00"}}&to={{$c.To.Format "2006-01-02T15:04:05Z07:00"}}',
+             metric: 'total_tokens',
+             type: 'bar'
+           })"
+           x-init="loadChart($el, $wire)"></div>
+    </div>
+  </div>
+
+  {{/* === Tabela recente (live tail) === */}}
+  <div class="c-card">
+    <div class="c-card__header">
+      <h3 class="c-card__title">Atividade recente</h3>
+      <button class="c-button c-button--ghost c-button--sm"
+              hx-get="/api/web/admin/dashboard?group_by=user"
+              hx-target="#recent-activity"
+              hx-swap="innerHTML">
+        Atualizar
+      </button>
+    </div>
+    <div id="recent-activity" class="c-card__body">
+      <p class="u-text-muted u-text-sm">Atualizações em tempo real chegarão via SSE/WebSocket no roadmap. Por enquanto, use o botão Atualizar.</p>
+    </div>
+  </div>
+</div>
+
+{{/*
+ * ECharts carregado condicionalmente (apenas nesta página). CDN com SRI.
+ * Componente Alpine "echartsInit" encapsula fetch + render.
+ */}}
+<script src="https://cdn.jsdelivr.net/npm/echarts@5.5.1/dist/echarts.min.js"
+        integrity="sha384-zQ9LkPqvS7I5FqOvLU8LZ/yQyGN+qTIpa5ngDgZ8vop3h1nscL8SwtxOz5IlsPR"
+        crossorigin="anonymous"></script>
+<script>
+window.echartsInit = (config) => ({
+  config,
+  async loadChart(el) {
+    if (!window.echarts) return;
+    const chart = echarts.init(el, null, { renderer: 'canvas' });
+    try {
+      const resp = await fetch(config.url, { credentials: 'same-origin' });
+      if (!resp.ok) throw new Error('HTTP ' + resp.status);
+      const data = await resp.json();
+      const series = (data.series || []).filter(s => s[config.metric] > 0).slice(0, 10);
+      const labels = series.map(s => s.label);
+      const values = series.map(s => s[config.metric]);
+
+      let option;
+      if (config.type === 'pie') {
+        option = {
+          tooltip: { trigger: 'item', formatter: '{b}: {c} ({d}%)' },
+          series: [{
+            type: 'pie', radius: ['40%', '70%'], avoidLabelOverlap: true,
+            label: { show: true, formatter: '{b}\n{d}%' },
+            data: series.map(s => ({ name: s.label, value: s[config.metric] }))
+          }]
+        };
+      } else {
+        const horizontal = config.orient === 'horizontal';
+        option = {
+          tooltip: { trigger: 'axis' },
+          grid: { left: '3%', right: '4%', bottom: '3%', containLabel: true },
+          xAxis: { type: horizontal ? 'value' : 'category', data: horizontal ? null : labels },
+          yAxis: { type: horizontal ? 'category' : 'value', data: horizontal ? labels : null },
+          series: [{ type: config.type || 'bar', data: values, itemStyle: { borderRadius: [4,4,0,0] } }]
+        };
+      }
+      chart.setOption(option);
+    } catch (e) {
+      el.innerHTML = '<p class="u-text-muted u-text-sm u-text-center u-my-6">Não foi possível carregar o gráfico.</p>';
+    }
+    window.addEventListener('resize', () => chart.resize());
+  }
+});
+</script>{{end}}

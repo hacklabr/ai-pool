@@ -1,0 +1,88 @@
+# .dockerignore — reduz contexto de build Docker (BuildKit) para acelerar
+# builds e evitar leak de artefatos/secrets na imagem.
+#
+# Tudo listado aqui NÃO é enviado ao daemon Docker no `docker build`.
+
+# === Versionamento ===
+.git/
+.gitignore
+.gitattributes
+
+# === Mesa workflow (análises, briefings, specs) ===
+.mesa/
+
+# === Documentação ===
+# README.md e LICENSE precisam entrar se o binário os referencia (não referencia);
+# mantemos README.md fora para reduzir tamanho. LICENSE pode entrar (legal).
+*.md
+!LICENSE
+
+# === Ambiente / secrets locais ===
+.env
+.env.*
+!.env.example
+!.env.docker.example
+*.pem
+*.key
+kek-dev.key
+token-pepper-dev.key
+
+# === Artefatos de build ===
+bin/
+dist/
+aipp
+aipp.exe
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+*.test
+*.out
+
+# Go workspace / cache local
+go.work
+go.work.sum
+vendor/
+
+# Coverage / test artifacts
+coverage.out
+coverage.html
+
+# === IDE / editor ===
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# === Beego / runtime locais ===
+logs/
+conf/app.local.conf
+tmp/
+
+# === Docker volumes locais (dev) ===
+.pgdata/
+
+# === Docker própria ===
+Dockerfile
+docker-compose.yml
+docker-compose.*.yml
+.dockerignore
+
+# === CI/CD (não necessário no runtime) ===
+.github/
+.gitlab-ci.yml
+
+# === Deploy artifacts (Helm charts não entram no binário Go) ===
+deploy/
+charts/
+
+# === Scripts de dev local (migrate.sh é CLI dev, não runtime) ===
+# Mantemos scripts/ fora para não expor ferramentas de dev na imagem.
+# gen-kek.sh e migrate.sh são usados no HOST, não no container.
+scripts/
+
+# === Banco de dados local (dev) ===
+pgdata/

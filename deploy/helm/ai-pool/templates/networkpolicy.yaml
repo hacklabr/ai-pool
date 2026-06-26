@@ -1,0 +1,97 @@
+{{/* NetworkPolicy — blast radius containment (DevOps T1 §3.4, Security §9.2).
+
+     Default-deny em ambos direções. Libera explicitamente:
+     - Ingress: do Ingress controller (namespace kube-system por label) na porta HTTP.
+     - Egress:
+       * DNS (UDP 53 para kube-system / kube-dns).
+       * HTTPS (443) para provedores LLM externos (IPs variam — aberto por padrão).
+       * PostgreSQL (5432) para o CIDR do DB gerenciado.
+
+     Mitigação adicional via app: SSRF guard inside-app (blocklist de
+     RFC1918/loopback/metadata) cobre o caso de admin malicioso configurar
+     URL interna como provider base_url.
+
+     Conditional on .Values.networkPolicy.enabled=true.
+     Requer CNI que implementa NetworkPolicy (Calico/Cilium/AWS VPC CNI/...).
+*/}}
+{{- if .Values.networkPolicy.enabled -}}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "ai-pool.networkPolicyName" . }}
+  labels:
+    {{- include "ai-pool.commonLabels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "ai-pool.selectorLabels" . | nindent 6 }}
+  policyTypes:
+    - Ingress
+    - Egress
+  {{- if .Values.networkPolicy.ingress.enabled }}
+  ingress:
+    # Permite tráfego HTTP apenas do namespace do Ingress controller.
+    # A label kubernetes.io/metadata.name é setada automaticamente em K8s ≥1.21.
+    # Em setups onde o Ingress controller usa pod labels específicas, ajustar.
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+          # Para setups mais restritivos, adicione podSelector aqui:
+          # podSelector:
+          #   matchLabels:
+          #     app.kubernetes.io/name: ingress-nginx
+      ports:
+        - protocol: TCP
+          port: 8080
+    # Permite tráfego do mesmo namespace (debug, monitoring side-car opcional).
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ .Release.Namespace }}
+  {{- end }}
+  {{- if .Values.networkPolicy.egress.enabled }}
+  egress:
+    {{- if .Values.networkPolicy.egress.allowDNS }}
+    # DNS — kube-dns no namespace kube-system.
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+    {{- end }}
+    {{- if .Values.networkPolicy.egress.allowHTTPSExternal }}
+    # HTTPS para provedores LLM externos (Gemini, Mistral, DeepSeek, Z.ai, Kimi).
+    # IPs variam — aberto em 0.0.0.0/0. Mitigação adicional: SSRF guard no app.
+    # Para controle por hostname (futuro ROADMAP): egress proxy (Squid/Istio).
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+            except:
+              # Blocklist de IPs internos — defesa em profundidade adicional.
+              - 10.0.0.0/8
+              - 172.16.0.0/12
+              - 192.168.0.0/16
+              - 169.254.0.0/16    # inclui 169.254.169.254 (cloud metadata!)
+              - 127.0.0.0/8       # loopback
+              - ::1/128
+              - fc00::/7          # IPv6 ULA
+              - fe80::/10         # IPv6 link-local
+      ports:
+        - protocol: TCP
+          port: 443
+    {{- end }}
+    # PostgreSQL gerenciado — CIDR específico do CloudSQL/RDS/Azure DB.
+    # Em values-prod.yaml: definir o CIDR exato (ex.: 10.x.y.z/32 ou /28).
+    - to:
+        - ipBlock:
+            cidr: {{ .Values.networkPolicy.egress.databaseCIDR | quote }}
+      ports:
+        - protocol: TCP
+          port: {{ .Values.networkPolicy.egress.databasePort }}
+  {{- end }}
+{{- end -}}

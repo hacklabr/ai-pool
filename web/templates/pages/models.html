@@ -1,0 +1,99 @@
+{{define "pages/models.html"}}{{template "layouts/base.html" .}}{{end}}
+
+{{define "page-content"}}{{$c := .Content}}<div class="o-stack u-my-6">
+  <div class="o-page-header">
+    <div>
+      <h1>Modelos</h1>
+      <p class="u-text-muted u-text-sm">Modelos de LLM cadastrados (o nome que o cliente envia no campo <code>model</code>).</p>
+    </div>
+    <button class="c-button" @click="$dispatch('open-modal', {id: 'modal-new-model'})">
+      + Novo modelo
+    </button>
+  </div>
+
+  {{if $c.Models}}
+    <div class="o-grid">
+      {{range $m := $c.Models}}
+        <div class="c-provider-card">
+          <div class="c-provider-card__header">
+            <h3 class="c-provider-card__name">{{$m.Name}}</h3>
+            {{if $m.IsActive}}
+              <span class="c-status-badge c-status-badge--success">ativo</span>
+            {{else}}
+              <span class="c-status-badge c-status-badge--neutral">inativo</span>
+            {{end}}
+          </div>
+          <div class="c-provider-card__field">
+            <span class="c-provider-card__field-label">Provedor</span>
+            <span class="c-provider-card__field-value">{{$m.ProviderName}} ({{$m.ProviderSlug}})</span>
+          </div>
+          <div class="c-provider-card__field">
+            <span class="c-provider-card__field-label">Nome de exibição</span>
+            <span class="c-provider-card__field-value">
+              {{if $m.DisplayName}}{{$m.DisplayName}}{{else}}<span class="u-text-subtle">(igual ao nome)</span>{{end}}
+            </span>
+          </div>
+          <div class="c-provider-card__field">
+            <span class="c-provider-card__field-label">Janela de contexto</span>
+            <span class="c-provider-card__field-value">
+              {{if $m.ContextWindow}}{{$m.ContextWindow}} tokens{{else}}<span class="u-text-subtle">(não informada)</span>{{end}}
+            </span>
+          </div>
+        </div>
+      {{end}}
+    </div>
+  {{else}}
+    <div class="c-empty-state">
+      <h3 class="c-empty-state__title">Nenhum modelo cadastrado</h3>
+      <p class="u-text-muted">Cadastre modelos para que o proxy consiga rotear as requisições.</p>
+    </div>
+  {{end}}
+</div>
+
+{{/* Modal: novo modelo */}}
+<div class="c-modal" x-show="$store.modals.open === 'modal-new-model'" x-cloak
+     @keydown.escape.window="$store.modals.close()"
+     @click.self="$store.modals.close()" role="dialog" aria-modal="true" aria-labelledby="modal-new-model-title">
+  <div class="c-modal__dialog">
+    <div class="c-modal__header">
+      <h2 class="c-modal__title" id="modal-new-model-title">Novo modelo</h2>
+      <button class="c-modal__close" aria-label="Fechar" @click="$store.modals.close()">✕</button>
+    </div>
+    <form hx-post="/api/web/admin/models"
+          hx-headers='{"X-CSRF-Token": "{{.CSRFToken}}"}'
+          hx-on::after-request="if(event.detail.successful) location.reload()">
+      <div class="c-form-field">
+        <label for="new-model-provider">Provedor</label>
+        <select id="new-model-provider" name="provider_id" required>
+          <option value="" disabled selected>Selecione um provedor…</option>
+          {{range $p := $c.Providers}}
+            <option value="{{$p.ID}}">{{$p.Name}} ({{$p.Slug}})</option>
+          {{end}}
+        </select>
+        {{if not $c.Providers}}
+          <p class="c-form-field__hint">Nenhum provedor ativo. Cadastre um provedor antes.</p>
+        {{end}}
+      </div>
+      <div class="c-form-field">
+        <label for="new-model-name">Nome do modelo</label>
+        <input id="new-model-name" name="name" type="text" required
+               placeholder="glm-4.6">
+        <p class="c-form-field__hint">Exatamente o que vai no campo <code>model</code> do payload OpenAI.</p>
+      </div>
+      <div class="c-form-field">
+        <label for="new-model-display">Nome de exibição (opcional)</label>
+        <input id="new-model-display" name="display_name" type="text"
+               placeholder="GLM-4.6">
+      </div>
+      <div class="c-form-field">
+        <label for="new-model-ctx">Janela de contexto em tokens (opcional)</label>
+        <input id="new-model-ctx" name="context_window" type="number" min="1"
+               placeholder="128000">
+      </div>
+      <div class="c-modal__footer">
+        <button type="button" class="c-button c-button--ghost" @click="$store.modals.close()">Cancelar</button>
+        <button type="submit" class="c-button">Criar</button>
+      </div>
+    </form>
+  </div>
+</div>{{end}}

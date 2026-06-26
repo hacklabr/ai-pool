@@ -1,0 +1,51 @@
+{{define "partials/sidebar.html"}}<aside class="o-layout__sidebar c-sidebar"
+        :class="{ 'is-open': sidebarOpen }"
+        role="navigation" aria-label="Navegação principal">
+  {{/* Botão fechar em mobile */}}
+  <button class="c-icon-button u-hidden-desktop"
+          style="position:absolute; top:.5rem; right:.5rem; color:#fff;"
+          aria-label="Fechar menu"
+          @click="sidebarOpen = false">✕</button>
+
+  <div class="c-sidebar__brand">AI Pool</div>
+
+  <nav class="o-sidebar-nav c-sidebar__nav">
+    {{if eq .User.Role "admin"}}
+      <div class="c-sidebar__section-label">Administração</div>
+      <a href="/web/dashboard" class="c-sidebar__item {{if eq .ActiveNav "dashboard"}}is-active{{end}}">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><rect x="3" y="3" width="7" height="9"/><rect x="14" y="3" width="7" height="5"/><rect x="14" y="12" width="7" height="9"/><rect x="3" y="16" width="7" height="5"/></svg>
+        Dashboard
+      </a>
+      <a href="/web/admin/providers" class="c-sidebar__item {{if eq .ActiveNav "providers"}}is-active{{end}}">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></svg>
+        Provedores
+      </a>
+      <a href="/web/admin/models" class="c-sidebar__item {{if eq .ActiveNav "models"}}is-active{{end}}">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M12 2L2 7l10 5 10-5-10-5z"/><path d="M2 17l10 5 10-5M2 12l10 5 10-5"/></svg>
+        Modelos
+      </a>
+      <a href="/web/admin/keys" class="c-sidebar__item {{if eq .ActiveNav "keys"}}is-active{{end}}">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M21 2l-2 2m-7.61 7.61a5.5 5.5 0 1 1-7.778 7.778 5.5 5.5 0 0 1 7.777-7.777zm0 0L15.5 7.5m0 0l3 3L22 7l-3-3"/></svg>
+        Chaves
+      </a>
+      <a href="/web/admin/users" class="c-sidebar__item {{if eq .ActiveNav "users"}}is-active{{end}}">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75"/></svg>
+        Usuários
+      </a>
+      <a href="/web/admin/audit" class="c-sidebar__item {{if eq .ActiveNav "audit"}}is-active{{end}}">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg>
+        Auditoria
+      </a>
+    {{end}}
+
+    <div class="c-sidebar__section-label">Pessoal</div>
+    <a href="/web/me/tokens" class="c-sidebar__item {{if eq .ActiveNav "my-tokens"}}is-active{{end}}">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/></svg>
+      Meus tokens
+    </a>
+    <a href="/web/me/usage" class="c-sidebar__item {{if eq .ActiveNav "my-usage"}}is-active{{end}}">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M3 3v18h18"/><path d="M18 17V9M13 17V5M8 17v-3"/></svg>
+      Meu uso
+    </a>
+  </nav>
+</aside>{{end}}

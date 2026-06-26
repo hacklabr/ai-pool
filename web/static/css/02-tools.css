@@ -1,0 +1,12 @@
+/* =============================================================================
+ * ITCSS Layer 02 — Tools (mixins / functions).
+ *
+ * MVP usa CSS vanilla puro (sem Sass/PostCSS obrigatório). As "tools" aqui são
+ * apenas @media queries nomeadas e custom properties derivadas. Se LightnCSS
+ * for adotado no futuro, esta camada abrigaria @use mixins.
+ * ============================================================================= */
+
+/* Breakpoints nomeados — usar como:
+ *   @media (min-width: 48rem) { ... }  // bp-md
+ * Os valores em rem alinham com --bp-* (convertidos: 640px = 40rem, etc).
+ */
