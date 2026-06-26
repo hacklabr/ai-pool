@@ -50,7 +50,7 @@ Access the admin UI (port-forward as in step 3):
 
 Notes:
 
-- DATABASE_URL: sourced from {{ if .Values.database.existingSecret -}}existing Secret "{{ .Values.database.existingSecret }}"{{ else if .Values.externalSecret.enabled -}}ExternalSecret "{{ include "ai-pool.dbSecretName" . }}" (ESO → backend){{ else -}}inline Secret (dev only){{ end }}.
+- DATABASE_URL: sourced from {{ if .Values.postgresql.enabled -}}bundled PostgreSQL (subchart bitnami/postgresql — service {{ .Release.Name }}-postgresql){{ else if .Values.database.existingSecret -}}existing Secret "{{ .Values.database.existingSecret }}"{{ else if .Values.externalSecret.enabled -}}ExternalSecret "{{ include "ai-pool.dbSecretName" . }}" (ESO → backend){{ else -}}inline Secret (dev only){{ end }}.
 - KEK + token_pepper: mounted readOnly at /etc/aipp/ from {{ if .Values.externalSecret.enabled -}}ExternalSecret "{{ include "ai-pool.appSecretName" . }}" (ESO){{ else -}}Secret "{{ include "ai-pool.appSecretName" . }}" (manual){{ end }}.
 - NetworkPolicy: {{ if .Values.networkPolicy.enabled -}}ENABLED (egress restricto a HTTPS externo + DB + DNS){{ else -}}DISABLED (cluster default){{ end }}.
 - Ingress: {{ if .Values.ingress.enabled -}}ENABLED with SSE annotations (proxy-buffering: off, 1h timeouts){{ else -}}DISABLED — set ingress.enabled=true e defina ingress.host{{ end }}.

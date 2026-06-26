@@ -117,6 +117,33 @@ database:
   minConns: "2"
   connMaxLifetime: "1h"
 
+# === PostgreSQL (subchart Bitnami) — OPCIONAL ===
+# Default OFF. Quando enabled=true, o chart sobe um PostgreSQL no cluster
+# (com PVC persistente) e wired o DATABASE_URL automaticamente para a app e o
+# migration-job. Ideal para self-hosted/dev/homologação em um único helm install.
+#
+# Em PRODUÇÃO real prefira um DB gerenciado (CloudSQL/RDS): deixe enabled=false
+# e use database.existingSecret ou externalSecret.
+#
+# ANTES de instalar com o subchart: `helm dependency update deploy/helm/ai-pool`
+# (baixa o chart bitnami/postgresql em charts/).
+postgresql:
+  enabled: false
+  # Quando enabled, o chart constrói DATABASE_URL =
+  #   postgres://<auth.username>:<auth.password>@<release>-postgresql:5432/<auth.database>?sslmode=disable
+  # e o migration-job/app usam ela. A senha DEVE ser setada (sete via --set ou
+  # values locais; não committar):  --set postgresql.auth.password=sua-senha
+  auth:
+    username: aipp
+    database: aipp
+    password: ""           # OBRIGATÓRIO setar quando enabled=true
+    postgresPassword: ""   # senha do superuser postgres (opcional)
+  primary:
+    persistence:
+      enabled: true
+      size: 10Gi
+  # Demais opções do chart bitnami/postgresql podem ser sobrescritas aqui.
+
 # === External Secrets Operator (ESO) ===
 # Materializa Secrets no cluster a partir de um backend externo
 # (Vault / AWS Secrets Manager / GCP Secret Manager / Azure Key Vault).

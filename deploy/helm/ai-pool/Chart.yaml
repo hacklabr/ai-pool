@@ -16,13 +16,17 @@ version: 0.1.0
 # Deve casar com a tag da imagem Docker referenciada em values.yaml (image.tag).
 appVersion: "0.1.0"
 
-# Dependências: nenhuma no MVP. Quando o ROADMAP trouxer Redis (multi-réplica),
-# adicionar:
-#   dependencies:
-#     - name: redis
-#       version: "~18.x"
-#       repository: https://charts.bitnami.com/bitnami
-#       condition: redis.enabled
+# Dependências:
+#   - postgresql (Bitnami) OPCIONAL: subchart de PostgreSQL para self-hosted/
+#     dev/homologação. Default OFF (postgresql.enabled=false) — em produção use
+#     um DB gerenciado (CloudSQL/RDS) apontado via database.existingSecret.
+#     Para instalar com o subchart: `helm dependency update` antes do install.
+#   - redis (futuro, ROADMAP — multi-réplica Opção B): ainda não adicionado.
+dependencies:
+  - name: postgresql
+    version: "16.x.x"
+    repository: https://charts.bitnami.com/bitnami
+    condition: postgresql.enabled
 keywords:
   - llm
   - openai
