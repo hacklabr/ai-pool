@@ -92,9 +92,12 @@ app:
   tokenPepperPath: /etc/aipp/token_pepper
 
 # === Database ===
-# Default: managed DB (CloudSQL/RDS/Azure DB for PostgreSQL) acessado via
+# Default: PostgreSQL INCLUÍDO no release (postgresql.enabled=true acima) — a
+# DATABASE_URL é construída automaticamente apontando para o serviço do subchart.
+#
+# Alternativas (DB externo/gerenciado): sete postgresql.enabled=false e use
+# database.existingSecret (Secret K8s com DATABASE_URL) ou externalSecret (ESO).
 # DATABASE_URL no formato postgres://user:pass@host:5432/db?sslmode=require.
-# A conexão (com senha) vem do Secret referenciado abaixo.
 database:
   # existingSecret: se você JÁ TEM um Secret K8s com a chave DATABASE_URL
   # (gerado por ESO fora deste chart, ou manualmente), aponte aqui.
@@ -117,26 +120,24 @@ database:
   minConns: "2"
   connMaxLifetime: "1h"
 
-# === PostgreSQL (subchart Bitnami) — OPCIONAL ===
-# Default OFF. Quando enabled=true, o chart sobe um PostgreSQL no cluster
-# (com PVC persistente) e wired o DATABASE_URL automaticamente para a app e o
-# migration-job. Ideal para self-hosted/dev/homologação em um único helm install.
+# === PostgreSQL (subchart Bitnami) — INCLUÍDO por padrão ===
+# Default ON: um `helm install` sobe app + PostgreSQL juntos (self-hosted/dev/
+# homologação em um único release). A senha do banco DEVE ser fornecida via
+# --set postgresql.auth.password=... (ou values locais — nunca commitar).
 #
-# Em PRODUÇÃO real prefira um DB gerenciado (CloudSQL/RDS): deixe enabled=false
-# e use database.existingSecret ou externalSecret.
+# Para usar um DB GERENCIADO (CloudSQL/RDS) em produção: sete
+# postgresql.enabled=false e use database.existingSecret ou externalSecret.
 #
-# ANTES de instalar com o subchart: `helm dependency update deploy/helm/ai-pool`
-# (baixa o chart bitnami/postgresql em charts/).
+# O subchart está vendored em charts/ (install direto, sem dependency update).
 postgresql:
-  enabled: false
-  # Quando enabled, o chart constrói DATABASE_URL =
+  enabled: true
+  # DATABASE_URL é construído automaticamente:
   #   postgres://<auth.username>:<auth.password>@<release>-postgresql:5432/<auth.database>?sslmode=disable
-  # e o migration-job/app usam ela. A senha DEVE ser setada (sete via --set ou
-  # values locais; não committar):  --set postgresql.auth.password=sua-senha
+  # e consumido pela app e pelo migration-job.
   auth:
     username: aipp
     database: aipp
-    password: ""           # OBRIGATÓRIO setar quando enabled=true
+    password: ""           # OBRIGATÓRIO: --set postgresql.auth.password=...
     postgresPassword: ""   # senha do superuser postgres (opcional)
   primary:
     persistence:
