@@ -1,4 +1,4 @@
-module github.com/rafael/ai-pool
+module github.com/hacklabr/ai-pool
 
 go 1.26.4
 

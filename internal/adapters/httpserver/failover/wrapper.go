@@ -11,9 +11,9 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/rafael/ai-pool/internal/adapters/httpserver/proxy"
-	"github.com/rafael/ai-pool/internal/domain"
-	"github.com/rafael/ai-pool/internal/routing"
+	"github.com/hacklabr/ai-pool/internal/adapters/httpserver/proxy"
+	"github.com/hacklabr/ai-pool/internal/domain"
+	"github.com/hacklabr/ai-pool/internal/routing"
 )
 
 // ChainWrapper implementa proxy.FailoverExecuter usando routing.FailoverChain.

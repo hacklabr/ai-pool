@@ -33,9 +33,9 @@ import (
 
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 
-	"github.com/rafael/ai-pool/internal/config"
-	"github.com/rafael/ai-pool/internal/domain"
-	"github.com/rafael/ai-pool/internal/observability"
+	"github.com/hacklabr/ai-pool/internal/config"
+	"github.com/hacklabr/ai-pool/internal/domain"
+	"github.com/hacklabr/ai-pool/internal/observability"
 )
 
 // Server é o Proxy Core. Carrega todas as dependências via struct fields

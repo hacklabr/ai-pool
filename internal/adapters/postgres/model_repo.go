@@ -6,7 +6,7 @@ import (
 
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
-	"github.com/rafael/ai-pool/internal/domain"
+	"github.com/hacklabr/ai-pool/internal/domain"
 )
 
 // ModelRepo persiste e consulta modelos de LLM (spec §3.4.1 item 6).

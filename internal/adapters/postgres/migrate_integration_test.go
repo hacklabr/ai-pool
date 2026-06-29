@@ -22,7 +22,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/rafael/ai-pool/migrations"
+	"github.com/hacklabr/ai-pool/migrations"
 )
 
 func TestRunMigrations_AppliesSchema(t *testing.T) {

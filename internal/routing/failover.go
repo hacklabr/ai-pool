@@ -12,8 +12,8 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/rafael/ai-pool/internal/domain"
-	"github.com/rafael/ai-pool/internal/observability"
+	"github.com/hacklabr/ai-pool/internal/domain"
+	"github.com/hacklabr/ai-pool/internal/observability"
 )
 
 // =============================================================================

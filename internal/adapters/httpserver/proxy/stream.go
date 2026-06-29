@@ -10,8 +10,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/rafael/ai-pool/internal/config"
-	"github.com/rafael/ai-pool/internal/usage"
+	"github.com/hacklabr/ai-pool/internal/config"
+	"github.com/hacklabr/ai-pool/internal/usage"
 )
 
 // =============================================================================

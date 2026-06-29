@@ -4,8 +4,8 @@ import (
 	"context"
 	"time"
 
-	"github.com/rafael/ai-pool/internal/domain"
-	"github.com/rafael/ai-pool/internal/routing"
+	"github.com/hacklabr/ai-pool/internal/domain"
+	"github.com/hacklabr/ai-pool/internal/routing"
 )
 
 // =============================================================================

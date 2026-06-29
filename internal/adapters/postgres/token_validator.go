@@ -8,7 +8,7 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
-	"github.com/rafael/ai-pool/internal/domain"
+	"github.com/hacklabr/ai-pool/internal/domain"
 )
 
 // TokenValidator implementa domain.TokenValidator com DB hit por request

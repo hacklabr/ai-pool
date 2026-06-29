@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/rafael/ai-pool/internal/domain"
+	"github.com/hacklabr/ai-pool/internal/domain"
 )
 
 // newFakeClockSessionStore cria um store com clock fake injetável (para testes TTL).

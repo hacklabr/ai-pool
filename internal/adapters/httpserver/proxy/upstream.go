@@ -6,7 +6,7 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/rafael/ai-pool/internal/config"
+	"github.com/hacklabr/ai-pool/internal/config"
 )
 
 // =============================================================================

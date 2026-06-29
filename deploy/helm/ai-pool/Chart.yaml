@@ -35,7 +35,7 @@ keywords:
   - ai
   - beego
   - golang
-home: https://github.com/rafael/ai-pool
+home: https://github.com/hacklabr/ai-pool
 maintainers:
   - name: AI Provider Pool Maintainers
 icon: ""
