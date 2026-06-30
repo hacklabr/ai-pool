@@ -46,3 +46,4 @@ coverage.html
 
 # Mesa workflow (já no repo, mas se preferir ignorar descomente)
 # .mesa/
+deploy/helm/ai-pool/values-prod.yaml

@@ -120,30 +120,70 @@ database:
   minConns: "2"
   connMaxLifetime: "1h"
 
-# === PostgreSQL (subchart Bitnami) — INCLUÍDO por padrão ===
-# Default ON: um `helm install` sobe app + PostgreSQL juntos (self-hosted/dev/
-# homologação em um único release). A senha do banco DEVE ser fornecida via
-# --set postgresql.auth.password=... (ou values locais — nunca commitar).
+# === PostgreSQL — templates nativos (padrão Hacklab, sem subchart) ===
+# Implementado via StatefulSet + PVC + Secret + Service próprios (templates
+# postgresql-*.yaml). Imagem oficial postgres:16-alpine (não bitnami).
 #
-# Para usar um DB GERENCIADO (CloudSQL/RDS) em produção: sete
-# postgresql.enabled=false e use database.existingSecret ou externalSecret.
+# DEFAULT ON: um `helm install` sobe app + PostgreSQL juntos. A senha é
+# AUTO-GERADA na primeira instalação (randAlphaNum 24) e PERSISTIDA via lookup
+# entre upgrades — não precisa passar --set postgresql.auth.password=...
+# (mas pode, se quiser rotacionar/fixar).
 #
-# O subchart está vendored em charts/ (install direto, sem dependency update).
+# DATABASE_URL é gravada no Secret "<release>-db" pela própria chart, em sync
+# com o password. Consumida pela app e pelo migration-job.
+#
+# Para DB GERENCIADO (CloudSQL/RDS/Azure): sete postgresql.enabled=false e use
+# database.existingSecret (Secret pré-criado com chave DATABASE_URL).
 postgresql:
   enabled: true
-  # DATABASE_URL é construído automaticamente:
-  #   postgres://<auth.username>:<auth.password>@<release>-postgresql:5432/<auth.database>?sslmode=disable
-  # e consumido pela app e pelo migration-job.
+
+  image:
+    repository: postgres
+    tag: "16-alpine"
+
   auth:
     username: aipp
     database: aipp
-    password: ""           # OBRIGATÓRIO: --set postgresql.auth.password=...
-    postgresPassword: ""   # senha do superuser postgres (opcional)
+    # password vazio → auto-gerada na primeira instalação e persistida via lookup.
+    # Setar explicitamente rotaciona (cuidado: app + migration-job precisam do
+    # mesmo Secret, que é regenerado em conjunto).
+    password: ""
+
   primary:
     persistence:
       enabled: true
       size: 10Gi
-  # Demais opções do chart bitnami/postgresql podem ser sobrescritas aqui.
+      # storageClassName: "" (default do cluster). Em prod, use StorageClass
+      # block-based (ex.: ceph-blockstorage, gp3, premium-rwo).
+      storageClassName: ""
+      # annotations: labels no PVC (ex.: backup.velero.io/... se usar fs-backup).
+      annotations: {}
+
+  resources:
+    requests:
+      cpu: 250m
+      memory: 256Mi
+    limits:
+      cpu: 1000m
+      memory: 1Gi
+
+  # Annotations no Pod do postgres — padrão Velero para backup.
+  # Exemplo funcional (dump consistente via pre-hook em emptyDir):
+  #   podAnnotations:
+  #     backup.velero.io/backup-volumes: data,backups
+  #     pre.hook.backup.velero.io/container: postgresql
+  #     pre.hook.backup.velero.io/command: '["/bin/sh", "-c", "pg_dump -Fc -U $POSTGRES_USER $POSTGRES_DB > /backups/dump.pgc"]'
+  #     pre.hook.backup.velero.io/timeout: "300"
+  podAnnotations: {}
+
+  # Mounts extras no pod do postgres (PVC, emptyDir, configMap, secret).
+  # Suporta o mesmo schema do planoparticipativo/charts/mobi.
+  # Exemplo: /backups como emptyDir (alvo do pg_dump no pre-hook Velero):
+  #   extraMountPoints:
+  #     - name: backups
+  #       mountPath: /backups
+  #       emptyDir: {}
+  extraMountPoints: []
 
 # === External Secrets Operator (ESO) ===
 # Materializa Secrets no cluster a partir de um backend externo

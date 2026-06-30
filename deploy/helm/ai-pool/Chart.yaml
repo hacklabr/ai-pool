@@ -10,23 +10,17 @@ description: |
 type: application
 
 # Chart version (SemVer) — incrementar a cada release do chart.
-version: 0.1.0
+# 0.2.0: refatoração PostgreSQL — Bitnami subchart removido; templates nativos
+#        no padrão Hacklab (StatefulSet/PVC/Secret/Service próprios, imagem
+#        oficial postgres:16-alpine). Schema da seção `postgresql:` mudou.
+version: 0.2.0
 
 # appVersion = versão da aplicação empacotada (binário Go).
 # Deve casar com a tag da imagem Docker referenciada em values.yaml (image.tag).
 appVersion: "0.1.0"
 
-# Dependências:
-#   - postgresql (Bitnami) OPCIONAL: subchart de PostgreSQL para self-hosted/
-#     dev/homologação. Default OFF (postgresql.enabled=false) — em produção use
-#     um DB gerenciado (CloudSQL/RDS) apontado via database.existingSecret.
-#     Para instalar com o subchart: `helm dependency update` antes do install.
-#   - redis (futuro, ROADMAP — multi-réplica Opção B): ainda não adicionado.
-dependencies:
-  - name: postgresql
-    version: "16.x.x"
-    repository: https://charts.bitnami.com/bitnami
-    condition: postgresql.enabled
+# Sem dependencies desde 0.2.0 — PostgreSQL agora é templates nativos no chart.
+# Redis (ROADMAP — Opção B): adicionado quando escalar para multi-réplica.
 keywords:
   - llm
   - openai
@@ -35,7 +29,7 @@ keywords:
   - ai
   - beego
   - golang
-home: https://github.com/hacklabr/ai-pool
+home: https://github.com/rafael/ai-pool
 maintainers:
   - name: AI Provider Pool Maintainers
 icon: ""

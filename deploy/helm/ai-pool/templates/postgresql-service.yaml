@@ -1,0 +1,26 @@
+{{/* Service Headless para o StatefulSet do PostgreSQL.
+
+     Headless (clusterIP: None) é necessário para volumeClaimTemplates funcionar
+     com StatefulSet (Kubernetes exige serviceName apontando para um headless
+     Service). Para acesso pela app, use o Service ClusterIP normal em
+     postgresql-service.yaml.
+*/}}
+{{- if .Values.postgresql.enabled -}}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "ai-pool.postgresqlFullname" . }}
+  labels:
+    {{- include "ai-pool.commonLabels" . | nindent 4 }}
+    app.kubernetes.io/component: postgresql
+spec:
+  type: ClusterIP
+  ports:
+    - name: postgresql
+      port: 5432
+      targetPort: postgresql
+      protocol: TCP
+  selector:
+    {{- include "ai-pool.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: postgresql
+{{- end -}}

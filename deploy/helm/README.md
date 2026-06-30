@@ -10,13 +10,34 @@ de referência: `/.mesa/specifications/spec-388d67e6.md` §3.5.2.
 - **Imagem `distroless/base-debian12:nonroot`** (UID 65532, CA roots p/ HTTPS).
 - **Hardening**: `readOnlyRootFilesystem`, `runAsNonRoot`, `drop ALL caps`,
   `seccompProfile: RuntimeDefault`, `automountServiceAccountToken: false`.
-- **Migrations via Helm Job hook** (`pre-install,pre-upgrade`) rodando `aipp --migrate-only`
-  ANTES de qualquer pod subir. Falha no Job aborta o deploy.
+- **PostgreSQL**: templates NATIVOS (padrão Hacklab, desde chart v0.2.0).
+  Não usa mais subchart Bitnami. Imagem oficial `postgres:16-alpine`.
+  StatefulSet com `volumeClaimTemplates`, senha auto-gerada persistente via
+  `lookup`, `helm.sh/resource-policy: keep` (sobrevive a `helm uninstall`).
+- **Migrations via Helm `post-install/post-upgrade` Job hook** rodando
+  `aipp --migrate-only`. Tem init container `wait-for-db` (pg_isready loop)
+  que espera o postgres ficar Ready antes de migrar.
 - **Secrets**: External Secrets Operator (gold standard). KEK + token_pepper
   montados como **arquivos readOnly** (defesa em profundidade — não como env var).
+  Para smoke test: Secret manual pré-criado (ver INSTALL.md).
 - **Ingress** com annotations SSE críticas (`proxy-buffering: off`, timeouts 1h).
 - **NetworkPolicy** DenyAll default + liberações explícitas (DB, DNS, HTTPS externo).
-- **PostgreSQL gerenciado** (CloudSQL/RDS/Azure DB) — DATABASE_URL via Secret.
+  Desativada no `values-prod.yaml` (cluster Hacklab de confiança interna).
+- **Velero backup**: podAnnotations + extraMountPoints suportados no postgres
+  pod. Hook `pre.hook.backup.velero.io` com `pg_dump` para emptyDir (consistência).
+
+## Pré-requisitos no cluster
+
+1. **Ingress controller** nginx (ou compatível que respeite annotations `nginx.ingress.kubernetes.io/*`).
+2. **cert-manager** + **ClusterIssuer** `letsencrypt-prod` (para TLS via Let's Encrypt).
+3. **External Secrets Operator** + **SecretStore/ClusterSecretStore** apontando
+   para seu backend (Vault, AWS SM, GCP SM, Azure KV). Necessário se
+   `externalSecret.enabled=true`. Alternativa: criar Secret manualmente.
+4. **CNI com NetworkPolicy** (Calico, Cilium, AWS VPC CNI, etc.) — se
+   `networkPolicy.enabled=true`.
+5. **StorageClass** para o PVC do PostgreSQL (ex.: `ceph-blockstorage`,
+   `gp3`, `premium-rwo`).
+6. (Opcional) **Velero** com fs-backup para snapshots do volume do postgres.
 
 ## Pré-requisitos no cluster
 
@@ -31,53 +52,69 @@ de referência: `/.mesa/specifications/spec-388d67e6.md` §3.5.2.
 
 ## Instalação rápida
 
+### Cenário produção (Hacklab) — com PostgreSQL nativo + KEK manual + TLS
+
+Ver **[INSTALL.md](../../INSTALL.md)** para o procedimento completo. Resumo:
+
 ```bash
-# Cenário 1: smoke test com DATABASE_URL inline (NÃO use em prod real)
-helm upgrade --install ai-pool deploy/helm/ai-pool \
-  --namespace ai-pool --create-namespace \
-  --set image.tag=0.1.0 \
-  --set database.url="postgres://user:pass@host:5432/aipp?sslmode=require"
+# 1. KEK + pepper (uma única vez — salvar em cofre offline!)
+KEK=$(openssl rand -base64 32)
+PEPPER=$(openssl rand -base64 48)
 
-# Cenário 2: produção com ExternalSecret + Ingress + NetworkPolicy
-helm upgrade --install ai-pool deploy/helm/ai-pool \
-  --namespace ai-pool --create-namespace \
-  --set image.tag=0.1.0 \
-  --set externalSecret.enabled=true \
-  --set externalSecret.secretStoreRef.name=vault-backend \
-  --set externalSecret.secretStoreRef.kind=ClusterSecretStore \
-  --set ingress.enabled=true \
-  --set 'ingress.hosts[0].host=api.example.com' \
-  --set 'ingress.tls[0].secretName=ai-pool-tls' \
-  --set 'ingress.tls[0].hosts[0]=api.example.com' \
-  --set networkPolicy.enabled=true \
-  --set 'networkPolicy.egress.databaseCIDR=10.0.0.0/8'
+# 2. Namespace + Secret de KEK (nome deriva do release name)
+kubectl create namespace hacklab-ai-pool
+kubectl -n hacklab-ai-pool create secret generic hacklab-ai-pool-secrets \
+  --from-literal=kek="$KEK" --from-literal=token-pepper="$PEPPER"
 
-# Cenário 3: você já tem o Secret do DB criado (ESO fora do chart ou manualmente)
-helm upgrade --install ai-pool deploy/helm/ai-pool \
-  --namespace ai-pool --create-namespace \
-  --set database.existingSecret=ai-pool-db-prod
+# 3. Install (postgres nativo + app + ingress com TLS Let's Encrypt)
+helm install hacklab-ai-pool deploy/helm/ai-pool \
+  -n hacklab-ai-pool \
+  -f deploy/helm/ai-pool/values-prod.yaml
 ```
 
-Após o install, o `helm status` mostra as instruções (`NOTES.txt`) com smoke-tests.
+### Cenário smoke test (DATABASE_URL inline — NÃO use em prod real)
+
+```bash
+helm upgrade --install ai-pool deploy/helm/ai-pool \
+  --namespace ai-pool --create-namespace \
+  --set postgresql.enabled=false \
+  --set database.url="postgres://user:pass@external-host:5432/aipp?sslmode=require"
+```
+
+### Cenário DB gerenciado (CloudSQL/RDS)
+
+```bash
+kubectl -n ai-pool create secret generic ai-pool-db \
+  --from-literal=DATABASE_URL='postgres://USER:PASS@cloudsql:5432/aipp?sslmode=require'
+
+helm install ai-pool deploy/helm/ai-pool \
+  --namespace ai-pool --create-namespace \
+  --set postgresql.enabled=false \
+  --set database.existingSecret=ai-pool-db
+```
 
 ## Estrutura
 
 ```
 ai-pool/
-├── Chart.yaml              # name=ai-pool, version=0.1.0, appVersion=0.1.0
-├── values.yaml             # defaults (replicaCount=1, distroless nonroot, etc.)
+├── Chart.yaml              # name=ai-pool, version=0.2.0, appVersion=0.1.0 (sem dependencies)
+├── values.yaml             # defaults (postgres nativo, KEK via Secret, etc.)
+├── values-prod.yaml        # produção Hacklab (ia.hacklab.com.br, ceph-block, LE, Velero)
 └── templates/
-    ├── _helpers.tpl        # nomes canonical, labels
-    ├── configmap.yaml      # config NÃO-sensível (HTTP_ADDR, DEV_MODE, LOG_*, ...)
-    ├── secret.yaml         # DATABASE_URL inline (apenas smoke test; ver valores)
-    ├── externalsecret.yaml # ESO → Secret K8s (KEK + pepper + DATABASE_URL)
-    ├── deployment.yaml     # RollingUpdate, probes, securityContext, volumes
-    ├── service.yaml        # ClusterIP porta 80
-    ├── ingress.yaml        # nginx-ingress com annotations SSE
-    ├── migration-job.yaml  # Helm hook pre-install/pre-upgrade (aipp --migrate-only)
-    ├── networkpolicy.yaml  # DenyAll + egress DB/DNS/HTTPS
-    ├── serviceaccount.yaml # SA sem RBAC (app não fala com K8s API)
-    └── NOTES.txt           # instruções pós-install (smoke tests, bootstrap admin)
+    ├── _helpers.tpl            # nomes canonical, labels, helpers postgres
+    ├── configmap.yaml          # config NÃO-sensível (HTTP_ADDR, DEV_MODE, LOG_*, ...)
+    ├── secret.yaml             # DATABASE_URL inline (smoke); ou no-op quando PG embutido
+    ├── externalsecret.yaml     # ESO → Secret K8s (KEK + pepper + DATABASE_URL)
+    ├── deployment.yaml         # RollingUpdate, probes, securityContext, volumes
+    ├── service.yaml            # ClusterIP porta 80 → targetPort 8080
+    ├── ingress.yaml            # nginx-ingress com annotations SSE + cert-manager
+    ├── migration-job.yaml      # Helm hook post-install/post-upgrade (aipp --migrate-only)
+    ├── networkpolicy.yaml      # DenyAll + egress DB/DNS/HTTPS (opcional)
+    ├── serviceaccount.yaml     # SA sem RBAC (app não fala com K8s API)
+    ├── postgresql-statefulset.yaml  # PG nativo: StatefulSet + volumeClaimTemplates + Velero ann
+    ├── postgresql-service.yaml      # Service ClusterIP para o PG
+    ├── postgresql-secret.yaml       # Secret com password (auto-gerada) + DATABASE_URL
+    └── NOTES.txt               # instruções pós-install (smoke tests, bootstrap admin)
 ```
 
 ## Validação local (sem cluster)
@@ -90,12 +127,20 @@ make helm-template HELM_SETS="--set ingress.enabled=true"   # renderiza
 ## Migrations — como funciona
 
 1. O binário `aipp` embarca as migrations via `//go:embed` (migrations/embed.go).
-2. Helm cria um **Job** (`pre-install,pre-upgrade` hook) que roda `aipp --migrate-only`.
-3. O Job lê `DATABASE_URL` do mesmo Secret que o Deployment usará.
-4. Em sucesso (exit 0): Helm prossegue com o deploy.
-5. Em falha (exit 1): Helm aborta — nenhum pod novo sobe com schema inconsistente.
-6. `golang-migrate` usa advisory lock internamente — múltiplos Jobs em retry
+2. Helm cria um **Job** (`post-install,post-upgrade` hook) que roda `aipp --migrate-only`.
+3. O Job tem um **init container** `wait-for-db` (imagem `postgres:16-alpine`) que
+   faz loop `pg_isready` até o PostgreSQL responder. Necessário porque em
+   `post-install` o StatefulSet existe mas o pod pode ainda estar subindo.
+4. O Job lê `DATABASE_URL` do mesmo Secret que o Deployment usa.
+5. Em sucesso (exit 0): Helm declara install completo.
+6. Em falha (exit 1): Helm marca release como FAILED.
+7. `golang-migrate` usa advisory lock internamente — múltiplos Jobs em retry
    não corrompem.
+
+**Por que post-install e não pre-install?** Com PostgreSQL como template nativo
+(não subchart), o StatefulSet é um recurso regular aplicado DEPOIS dos hooks
+pre-install. Em pre-install, o DNS do Service do postgres não resolveria.
+Post-install garante que o StatefulSet já existe.
 
 ## Secrets — onde vive o quê
 

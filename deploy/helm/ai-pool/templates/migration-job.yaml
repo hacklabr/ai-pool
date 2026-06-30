@@ -1,22 +1,38 @@
-{{/* Job de Migrations — Helm pre-install/pre-upgrade hook.
+{{/* Job de Migrations — Helm post-install/post-upgrade hook.
 
-     Roda `aipp --migrate-only` ANTES de qualquer pod subir.
-     Mesma imagem do Deployment (mantém paridade de schema/binário).
+     CORREÇÃO vs versão anterior (0.1.0): hook mudou de pre-install para
+     post-install. Motivo: com PostgreSQL como template nativo (não subchart),
+     o postgres StatefulSet é um recurso regular aplicado DEPOIS dos pre-install
+     hooks. Em pre-install, o Job não conseguiria resolver o DNS do Service
+     do postgres. Em post-install, o StatefulSet já existe; o init container
+     wait-for-db apenas espera o pod ficar Ready.
 
-     Comportamento:
-     - Sucesso (exit 0) → Helm prossegue com install/upgrade.
-     - Falha (exit 1)   → Helm aborta o release (zero pods novos com schema inconsistente).
+     Fluxo (install):
+       1. Helm aplica todos os recursos regulares (postgres StatefulSet, app
+          Deployment, Secrets, Services, Ingress, etc.).
+       2. Helm roda hooks post-install (este Job).
+       3. Init container wait-for-db faz loop pg_isready até postgres responder.
+       4. Container principal roda `aipp --migrate-only`.
+       5. Sucesso (exit 0) → Helm declara install completo.
+       6. Falha (exit 1) → Helm marca release como FAILED (visível em helm status).
+
+     Efeito no app durante 1ª instalação:
+       - O app Deployment começa a subir em paralelo com o postgres.
+       - Sem schema, o app crasha (K8s reinicia com backoff exponencial).
+       - Quando migrations completam (step 5), o app sobe com sucesso no
+         próximo retry. readinessProbe impede tráfego até a app estar pronta.
+
+     Em upgrades com RollingUpdate (maxSurge:1, maxUnavailable:0):
+       - Pods antigos continuam servendo (schema antigo).
+       - Pods novos crasham até migrations completar.
+       - Migrations DEVEM ser backward-compatible (prática padrão).
 
      Annotations Helm:
-     - helm.sh/hook: pre-install,pre-upgrade     → roda antes de criar/atualizar recursos.
-     - helm.sh/hook-weight: "-5"                 → roda antes de outros hooks (ex.: smoke test = 0).
-     - helm.sh/hook-delete-policy: before-hook-creation  → mantém histórico do Job anterior (auditoria),
-                                                            recria quando um novo hook vai rodar (evita colisão
-                                                            de nome em retry do mesmo release).
+       - helm.sh/hook: post-install,post-upgrade
+       - helm.sh/hook-weight: "-5"
+       - helm.sh/hook-delete-policy: before-hook-creation
 
      Idempotência: golang-migrate com advisory lock interno.
-     Concurrence-safe: dois Jobs em paralelo (raro) não corrompem.
-     NÃO abre pool pgx — apenas database/sql dedicado (postgres.RunMigrations).
 */}}
 {{- if .Values.migrations.enabled -}}
 apiVersion: batch/v1
@@ -26,11 +42,11 @@ metadata:
   labels:
     {{- include "ai-pool.commonLabels" . | nindent 4 }}
   annotations:
-    "helm.sh/hook": pre-install,pre-upgrade
+    "helm.sh/hook": post-install,post-upgrade
     "helm.sh/hook-weight": "-5"
     "helm.sh/hook-delete-policy": before-hook-creation
 spec:
-  backoffLimit: 2              # 2 retries em caso de falha transitória de DB
+  backoffLimit: 5              # 5 retries: tempo para postgres + PVC subirem
   activeDeadlineSeconds: {{ .Values.migrations.activeDeadlineSeconds }}
   ttlSecondsAfterFinished: 86400  # mantém Job 24h para auditoria de logs
   template:
@@ -64,6 +80,39 @@ spec:
       {{- end }}
       securityContext:
         {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      {{- if .Values.postgresql.enabled }}
+      # === Init container: espera postgres ficar Ready ===
+      # Necessário em post-install: o StatefulSet existe mas o pod pode
+      # ainda estar inicializando (PVC binding + postgres initdb).
+      initContainers:
+        - name: wait-for-db
+          image: {{ .Values.postgresql.image.repository }}:{{ .Values.postgresql.image.tag }}
+          imagePullPolicy: IfNotPresent
+          command:
+            - sh
+            - -c
+            - |
+              echo "Waiting for PostgreSQL at ${PGHOST}:5432..."
+              until pg_isready -h "${PGHOST}" -p 5432 -U "${PGUSER}" -d "${PGDATABASE}"; do
+                echo "  postgres not ready yet, retrying in 2s..."
+                sleep 2
+              done
+              echo "PostgreSQL is ready!"
+          env:
+            - name: PGHOST
+              value: {{ include "ai-pool.postgresqlFullname" . }}
+            - name: PGUSER
+              value: {{ default "aipp" .Values.postgresql.auth.username }}
+            - name: PGDATABASE
+              value: {{ default "aipp" .Values.postgresql.auth.database }}
+          resources:
+            requests:
+              cpu: 50m
+              memory: 32Mi
+            limits:
+              cpu: 100m
+              memory: 64Mi
+      {{- end }}
       containers:
         - name: migrate
           image: {{ include "ai-pool.image" . }}
