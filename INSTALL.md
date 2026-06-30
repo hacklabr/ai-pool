@@ -31,7 +31,7 @@ echo "PEPPER=$PEPPER"
 kubectl create namespace hacklab-ai-pool
 kubectl -n hacklab-ai-pool create secret generic hacklab-ai-pool-secrets \
   --from-literal=kek="$KEK" \
-  --from-literal=token-pepper="$PEPPER"
+  --from-literal=token_pepper="$PEPPER"
 ```
 
 > O nome do Secret **deriva do release name** (`<release>-secrets`).

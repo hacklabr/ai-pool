@@ -99,7 +99,7 @@ docker build -t ghcr.io/SEU_USUARIO/ai-pool:0.1.0 . && docker push ghcr.io/SEU_U
 KEK=$(openssl rand -base64 32); PEPPER=$(openssl rand -base64 48)
 kubectl create namespace ai-pool
 kubectl -n ai-pool create secret generic ai-pool-app-secrets \
-  --from-literal=kek="$KEK" --from-literal=token-pepper="$PEPPER"
+  --from-literal=kek="$KEK" --from-literal=token_pepper="$PEPPER"
 
 # (registry PRIVADO) image pull secret — pule se a imagem for pública
 kubectl -n ai-pool create secret docker-registry ghcr-pull \

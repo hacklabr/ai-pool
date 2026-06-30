@@ -69,7 +69,7 @@ kubectl create namespace hacklab-ai-pool
 
 kubectl -n hacklab-ai-pool create secret generic hacklab-ai-pool-secrets \
   --from-literal=kek="$KEK" \
-  --from-literal=token-pepper="$PEPPER"
+  --from-literal=token_pepper="$PEPPER"
 ```
 
 > Em produção real, prefira External Secrets Operator (`externalSecret.enabled=true`)

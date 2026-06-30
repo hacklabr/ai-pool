@@ -74,7 +74,7 @@ Notes:
      PEPPER=$(openssl rand -base64 48)
      kubectl -n {{ .Release.Namespace }} create secret generic {{ include "ai-pool.appSecretName" . }} \
        --from-literal=kek="$KEK" \
-       --from-literal=token-pepper="$PEPPER"
+       --from-literal=token_pepper="$PEPPER"
      # SALVAR KEK E PEPPER EM COFRE OFFLINE (perdeu = perdeu todas as chaves)
 {{- end }}
 

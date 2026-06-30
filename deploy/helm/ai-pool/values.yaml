@@ -209,7 +209,7 @@ externalSecret:
       secretKey: kek                  # chave dentro do Secret K8s
       property: ""                    # se o backend retorna JSON, sub-propriedade
     - remoteKey: ai-pool/token-pepper
-      secretKey: token-pepper
+      secretKey: token_pepper
       property: ""
 
 # === Probe defaults ===
