@@ -19,7 +19,7 @@
 
 # === Imagem do container ===
 image:
-  repository: ghcr.io/rafael/ai-pool
+  repository: ghcr.io/hacklabr/ai-pool
   # Tag IMUTÁVEL (SHA digest preferencial; semver aceitável em release).
   # NUNCA usar "latest" ou branch name em produção (spec DevOps §6.2).
   tag: "0.1.0"
@@ -292,9 +292,12 @@ ingress:
     nginx.ingress.kubernetes.io/proxy-buffering: "off"        # ESSENCIAL p/ SSE
     nginx.ingress.kubernetes.io/proxy-read-timeout: "3600"    # 1h p/ streams longos
     nginx.ingress.kubernetes.io/proxy-send-timeout: "3600"
-    nginx.ingress.kubernetes.io/configuration-snippet: |
-      proxy_http_version 1.1;
-      proxy_set_header Connection "";
+    # NOTE: configuration-snippet omitido por padrão — muitos clusters têm
+    # snippets desabilitados no ingress controller (hardening). Caso precise
+    # e o admin permita, adicione via values override:
+    # nginx.ingress.kubernetes.io/configuration-snippet: |
+    #   proxy_http_version 1.1;
+    #   proxy_set_header Connection "";
     # HSTS + security headers (optional):
     # nginx.ingress.kubernetes.io/force-ssl-redirect: "true"
   hosts:

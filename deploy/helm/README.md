@@ -39,40 +39,157 @@ de referência: `/.mesa/specifications/spec-388d67e6.md` §3.5.2.
    `gp3`, `premium-rwo`).
 6. (Opcional) **Velero** com fs-backup para snapshots do volume do postgres.
 
-## Pré-requisitos no cluster
+## Instalação — passo a passo (produção)
 
-1. **Ingress controller** nginx (ou compatível que respeite annotations `nginx.ingress.kubernetes.io/*`).
-2. **cert-manager** (opcional, mas recomendado para TLS via Let's Encrypt).
-3. **External Secrets Operator** + **SecretStore/ClusterSecretStore** apontando
-   para seu backend (Vault, AWS SM, GCP SM, Azure KV). Necessário se
-   `externalSecret.enabled=true`.
-4. **CNI com NetworkPolicy** (Calico, Cilium, AWS VPC CNI, etc.) — se
-   `networkPolicy.enabled=true`.
-5. **PostgreSQL** acessível pelo cluster (managed DB ou in-cluster StatefulSet).
+> Cenário Hacklab: PostgreSQL nativo (imagem oficial), KEK criado manualmente,
+> Ingress nginx + TLS Let's Encrypt, Velero backup via pre-hook `pg_dump`.
+> Namespace alvo: `hacklab-ai-pool`. Release name: `hacklab-ai-pool`.
 
-## Instalação rápida
+### Passo 1 — Gerar KEK + token pepper (uma única vez)
 
-### Cenário produção (Hacklab) — com PostgreSQL nativo + KEK manual + TLS
-
-Ver **[INSTALL.md](../../INSTALL.md)** para o procedimento completo. Resumo:
+O proxy cifra as chaves de provedores com AES-256-GCM. A KEK e o pepper são
+**gerados uma única vez** e devem ser **salvos em cofre offline imediatamente**
+(perdeu = perdeu todas as chaves cifradas no banco).
 
 ```bash
-# 1. KEK + pepper (uma única vez — salvar em cofre offline!)
 KEK=$(openssl rand -base64 32)
 PEPPER=$(openssl rand -base64 48)
+echo "KEK=$KEK"
+echo "PEPPER=$PEPPER"
+# ⚠️  SALVE A SAÍDA EM COFRE OFFLINE AGORA (passphrase manager, vault físico)
+```
 
-# 2. Namespace + Secret de KEK (nome deriva do release name)
+### Passo 2 — Criar namespace + Secret com KEK/pepper
+
+O nome do Secret **deriva do release name** (`<release>-secrets`). Com release
+`hacklab-ai-pool`, o Secret se chama `hacklab-ai-pool-secrets`.
+
+```bash
 kubectl create namespace hacklab-ai-pool
-kubectl -n hacklab-ai-pool create secret generic hacklab-ai-pool-secrets \
-  --from-literal=kek="$KEK" --from-literal=token-pepper="$PEPPER"
 
-# 3. Install (postgres nativo + app + ingress com TLS Let's Encrypt)
+kubectl -n hacklab-ai-pool create secret generic hacklab-ai-pool-secrets \
+  --from-literal=kek="$KEK" \
+  --from-literal=token-pepper="$PEPPER"
+```
+
+> Em produção real, prefira External Secrets Operator (`externalSecret.enabled=true`)
+> materializando este Secret a partir do seu vault — evita secret no shell history.
+
+### Passo 3 — Helm install
+
+```bash
 helm install hacklab-ai-pool deploy/helm/ai-pool \
   -n hacklab-ai-pool \
   -f deploy/helm/ai-pool/values-prod.yaml
 ```
 
-### Cenário smoke test (DATABASE_URL inline — NÃO use em prod real)
+O `helm install` imprime o `NOTES.txt` com smoke tests. O que sobe:
+
+- **PostgreSQL StatefulSet** (`postgres:16-alpine`, PVC `ceph-blockstorage`,
+  senha auto-gerada persistente).
+- **Deployment** da app (1 réplica, graceful shutdown, RollingUpdate zero-downtime).
+- **Migration Job** (`post-install` hook — init container `wait-for-db` espera
+  o postgres Ready, depois roda `aipp --migrate-only`).
+- Service, Ingress (nginx + cert-manager + annotations SSE), ConfigMap,
+  ServiceAccount, Secret do DB.
+
+### Passo 4 — Verificar pós-install
+
+```bash
+# Job de migrations completou? (pode levar 1-2 min na 1ª instalação)
+kubectl -n hacklab-ai-pool logs job/hacklab-ai-pool-migrate --tail=-1 | tail -10
+# Look for: "migrations applied successfully"
+
+# Pods prontos?
+kubectl -n hacklab-ai-pool get pods
+# Expect: hacklab-ai-pool-postgresql-0 Running
+#         hacklab-ai-pool-xxxxx Running
+#         hacklab-ai-pool-migrate-xxxx Completed
+
+# TLS emitido pelo cert-manager? (~1 min)
+kubectl -n hacklab-ai-pool get certificate
+# Expect: ai-pool-tls True
+
+# Smoke test HTTP
+kubectl -n hacklab-ai-pool port-forward svc/hacklab-ai-pool 8080:80 &
+curl -s http://localhost:8080/healthz    # {"status":"ok"}
+curl -s http://localhost:8080/readyz     # {"status":"ready",...}
+
+# Ou via Ingress (após DNS + TLS prontos):
+curl -s https://ia.hacklab.com.br/healthz
+```
+
+### Passo 5 — Bootstrap do admin (uma única vez)
+
+Em `DEV_MODE=false` (produção), o admin não é criado automaticamente.
+Crie via CLI do próprio binário (senha ≥ 12 chars):
+
+```bash
+kubectl -n hacklab-ai-pool exec deploy/hacklab-ai-pool -- \
+  env AIPP_BOOTSTRAP_ADMIN_PASSWORD='SuaSenhaForte123' \
+  /aipp --bootstrap-admin-username=admin
+```
+
+### Passo 6 — Configurar provedores via UI
+
+Acesse `https://ia.hacklab.com.br/web/login` e cadastre:
+
+1. **Provider** (ex.: Z.ai, DeepSeek, Gemini, Mistral, Kimi).
+2. **Model** vinculado ao provider.
+3. **Key** (a chave real do provedor — será cifrada com AES-256-GCM no DB).
+4. **Token** `sk-aipp-...` para seus clientes usarem.
+
+Teste o endpoint OpenAI-compatible:
+
+```bash
+curl https://ia.hacklab.com.br/v1/chat/completions \
+  -H "Authorization: Bearer sk-aipp-..." \
+  -H "Content-Type: application/json" \
+  -d '{"model":"glm-5.2","messages":[{"role":"user","content":"Olá!"}]}'
+```
+
+## Operações
+
+```bash
+# Atualizar (após mudar values-prod.yaml ou nova tag de imagem)
+helm upgrade hacklab-ai-pool deploy/helm/ai-pool \
+  -n hacklab-ai-pool -f deploy/helm/ai-pool/values-prod.yaml
+
+# Rollback
+helm rollback hacklab-ai-pool -n hacklab-ai-pool
+
+# Logs
+kubectl -n hacklab-ai-pool logs -f deploy/hacklab-ai-pool
+kubectl -n hacklab-ai-pool logs -f hacklab-ai-pool-postgresql-0
+
+# Senha atual do postgres (auto-gerada)
+kubectl -n hacklab-ai-pool get secret hacklab-ai-pool-db -o jsonpath='{.data.password}' | base64 -d
+
+# Remover release (NÃO apaga PVC do postgres — helm.sh/resource-policy: keep)
+helm uninstall hacklab-ai-pool -n hacklab-ai-pool
+
+# Reset completo (cuidado: apaga dados)
+kubectl -n hacklab-ai-pool delete statefulset hacklab-ai-pool-postgresql
+kubectl -n hacklab-ai-pool delete pvc -l app.kubernetes.io/component=postgresql
+```
+
+## Rotação de senha do PostgreSQL
+
+A senha é auto-gerada na 1ª instalação e persistida entre upgrades. Para rotacionar:
+
+```bash
+NEW_PASS=$(openssl rand -base64 24)
+helm upgrade hacklab-ai-pool deploy/helm/ai-pool \
+  -n hacklab-ai-pool -f deploy/helm/ai-pool/values-prod.yaml \
+  --set postgresql.auth.password="$NEW_PASS"
+# O Secret "<release>-db" é regenerado com nova senha + DATABASE_URL em sync.
+# Reinicie o pod do postgres para aplicar:
+kubectl -n hacklab-ai-pool delete pod hacklab-ai-pool-postgresql-0
+```
+
+## Outros cenários de instalação
+
+### Smoke test (DATABASE_URL inline — NÃO usar em produção)
 
 ```bash
 helm upgrade --install ai-pool deploy/helm/ai-pool \
@@ -81,7 +198,7 @@ helm upgrade --install ai-pool deploy/helm/ai-pool \
   --set database.url="postgres://user:pass@external-host:5432/aipp?sslmode=require"
 ```
 
-### Cenário DB gerenciado (CloudSQL/RDS)
+### DB gerenciado (CloudSQL/RDS/Azure DB)
 
 ```bash
 kubectl -n ai-pool create secret generic ai-pool-db \

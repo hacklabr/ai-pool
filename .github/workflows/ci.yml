@@ -282,8 +282,9 @@ jobs:
         with:
           images: ghcr.io/${{ github.repository }}
           tags: |
-            # SHA curto — SÓ em push para main (format=short = 7 chars).
-            type=sha,format=short,enable=${{ github.ref == 'refs/heads/main' }}
+            # SHA curto SEM prefixo (ex.: 956beea). prefix= remove o "sha-" default.
+            # SÓ em push para main.
+            type=sha,format=short,prefix=,enable=${{ github.ref == 'refs/heads/main' }}
             # Nome da tag como-is (v0.1.0) — SÓ em push de tag.
             type=ref,event=tag
             # latest — SÓ em tag estável (sem pre-release suffix).

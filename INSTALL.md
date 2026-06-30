@@ -41,7 +41,50 @@ kubectl -n hacklab-ai-pool create secret generic hacklab-ai-pool-secrets \
 > Em produção real, materialize este Secret via **External Secrets Operator**
 > (`externalSecret.enabled=true`) a partir do seu vault.
 
-## 2. Instalar (app + PostgreSQL embutido)
+## 2. Image pull secret (REGISTRY PRIVADO — obrigatório se a imagem não for pública)
+
+Se a imagem estiver em um registry **privado** (ex.: `ghcr.io/hacklabr/ai-pool`
+com package privado, ECR, GCR, Harbor), o Kubernetes precisa de credenciais
+para fazer o `pull`. Crie um Secret `docker-registry` no namespace antes do
+`helm install`:
+
+```bash
+# GitHub Container Registry (GHCR):
+kubectl -n hacklab-ai-pool create secret docker-registry ghcr-pull \
+  --docker-server=ghcr.io \
+  --docker-username=SEU_GITHUB_USER \
+  --docker-password=SEU_PAT_COM_READ_PACKAGES \
+  --docker-email=voce@email.com
+
+# Ou, para qualquer registry, usando ~/.docker/config.json:
+kubectl -n hacklab-ai-pool create secret generic ghcr-pull \
+  --from-file=.dockerconfigjson=$HOME/.docker/config.json \
+  --type=kubernetes.io/dockerconfigjson
+```
+
+> **PAT do GitHub** precisa ter escopo `read:packages`. Crie em:
+> https://github.com/settings/tokens (classic) — válida por 1 ano, **rotacione**.
+
+Depois referencie no `helm install` (ou em `values-prod.yaml`):
+
+```bash
+helm install hacklab-ai-pool deploy/helm/ai-pool \
+  -n hacklab-ai-pool \
+  -f deploy/helm/ai-pool/values-prod.yaml \
+  --set 'image.pullSecrets[0].name=ghcr-pull'
+```
+
+Ou, equivalente em `values-prod.yaml`:
+```yaml
+image:
+  pullSecrets:
+    - name: ghcr-pull
+```
+
+> **Registry público**: pule esta etapa. O chart vem com `image.pullSecrets: []`
+> por default e o Kubernetes baixa a imagem sem auth.
+
+## 3. Instalar (app + PostgreSQL embutido)
 
 ```bash
 helm install hacklab-ai-pool deploy/helm/ai-pool \
@@ -60,7 +103,7 @@ O que sobe:
 - Service, Ingress (nginx + cert-manager + annotations SSE),
   NetworkPolicy (opcional), ServiceAccount, probes.
 
-## 3. Pós-instalação
+## 4. Pós-instalação
 
 ```bash
 # migrations OK? (post-install hook — pode levar 1-2 min na 1ª instalação)
