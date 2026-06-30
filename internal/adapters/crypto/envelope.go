@@ -177,6 +177,8 @@ func LoadKEKFromFile(path string) ([]byte, error) {
 	if path == "" {
 		return nil, errors.New("crypto: empty KEK path")
 	}
+	// #nosec G304 -- path vem de KEK_PATH env var (config do operador/K8s
+	// ConfigMap), nunca de user input. Em K8s é montado como volume readOnly.
 	kek, err := os.ReadFile(path)
 	if err != nil {
 		return nil, fmt.Errorf("crypto: read KEK file %q: %w", path, err)

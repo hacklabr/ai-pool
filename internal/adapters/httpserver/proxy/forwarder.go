@@ -175,6 +175,9 @@ func buildUpstreamRequest(
 	if isStream {
 		body = ensureStreamIncludeUsage(bodyBytes)
 	}
+	// #nosec G704 -- SSRF é mitigado por domain.ValidateProviderURL aplicada
+	// antes de qualquer URL de provider chegar aqui. targetURL é construído
+	// a partir do Provider cadastrado no admin (não do request do cliente).
 	upReq, err := http.NewRequestWithContext(clientReq.Context(), clientReq.Method, targetURL, bytes.NewReader(body))
 	if err != nil {
 		return nil, fmt.Errorf("build upstream request: %w", err)
@@ -267,6 +270,9 @@ func ensureStreamIncludeUsage(body []byte) []byte {
 // Não adicionamos timeout aqui — quem chama controla o ciclo de vida.
 func sendUpstream(ctx context.Context, client *http.Client, req *http.Request) (*http.Response, error) {
 	req = req.WithContext(ctx)
+	// #nosec G704 -- req.URL foi validado por domain.ValidateProviderURL no
+	// momento do cadastro do provider (admin path). Proxy outbound é a função
+	// do serviço; não há taint flow de input do usuário para a URL final.
 	resp, err := client.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("upstream Do: %w", err)

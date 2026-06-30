@@ -77,9 +77,17 @@ func (r *ModelRepo) GetActiveProviderForModel(ctx context.Context, orgID domain.
 
 // int4ToNullable converte *int para pgtype.Int4 (Valid=false se nil).
 // Helper local (similar aos helpers.go, mas para Int4 aqui não exposto).
+// Clamp em 2.1B previne overflow silencioso (gosec G115).
 func int4ToNullable(i *int) pgtype.Int4 {
 	if i == nil {
 		return pgtype.Int4{Valid: false}
 	}
-	return pgtype.Int4{Int32: int32(*i), Valid: true}
+	v := *i
+	if v > 1<<31-1 {
+		v = 1<<31 - 1
+	}
+	if v < -1<<31 {
+		v = -1 << 31
+	}
+	return pgtype.Int4{Int32: int32(v), Valid: true}
 }

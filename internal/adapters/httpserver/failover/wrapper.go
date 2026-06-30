@@ -140,6 +140,9 @@ func (w *ChainWrapper) ExecuteProxyRequest(
 func (w *ChainWrapper) sendFunc() routing.SendUpstreamFunc {
 	return func(ctx context.Context, req *http.Request) routing.UpstreamOutcome {
 		req = req.WithContext(ctx)
+		// #nosec G704 -- o ChainWrapper só repassa requests cuja URL já foi
+		// validada por domain.ValidateProviderURL no cadastro do provider.
+		// O failover itera sobre chaves do mesmo provider, não constrói URLs.
 		r, err := w.upstreamClient.Do(req)
 		if err != nil {
 			return routing.UpstreamOutcome{Resp: nil, Err: err}

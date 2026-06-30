@@ -223,8 +223,11 @@ jobs:
           echo "Rendered $(grep -c '^kind:' /tmp/template-smoke.yaml) resources"
 
       - name: helm template — full prod (ESO + ingress + networkPolicy)
+        # Cenário prod: subchart ON (postgresql.enabled=true default) exige
+        # auth.password. Setamos dummy value só pro template renderizar.
         run: |
           helm template ai-pool deploy/helm/ai-pool \
+            --set postgresql.auth.password=ci-dummy \
             --set externalSecret.enabled=true \
             --set externalSecret.secretStoreRef.name=vault-backend \
             --set ingress.enabled=true \
