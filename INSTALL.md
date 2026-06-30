@@ -118,10 +118,10 @@ kubectl -n hacklab-ai-pool get pods
 kubectl -n hacklab-ai-pool port-forward svc/hacklab-ai-pool 8080:80 &
 curl -s http://localhost:8080/healthz   # {"status":"ok"}
 
-# bootstrap do admin (DEV_MODE=false: senha ≥12 chars via env)
+# bootstrap do admin (one-shot; idempotente; senha ≥12 chars)
+# Use a flag --bootstrap-admin-password (a imagem distroless não tem o binário `env`)
 kubectl -n hacklab-ai-pool exec deploy/hacklab-ai-pool -- \
-  env AIPP_BOOTSTRAP_ADMIN_PASSWORD='SuaSenhaForte123' \
-  /aipp --bootstrap-admin-username=admin
+  /aipp --bootstrap-admin-username=admin --bootstrap-admin-password='SuaSenhaForte123'
 ```
 
 Acesse a UI: `https://ia.hacklab.com.br/web/login`

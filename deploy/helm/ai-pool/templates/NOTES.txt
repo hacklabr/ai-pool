@@ -33,15 +33,14 @@ PostgreSQL: bundled (imagem oficial postgres:{{ .Values.postgresql.image.tag }})
    curl -s http://localhost:8080/healthz    # {"status":"ok"}
    curl -s http://localhost:8080/readyz     # {"status":"ready","checks":{...}}
 
-4. Bootstrap the admin user (one-time; idempotent):
+4. Bootstrap the admin user (one-time; idempotent; password ≥12 chars):
    {{- if eq .Values.app.devMode "true" }}
-   DEV_MODE=true → admin bootstrap é automático no startup. Username:
-   {{ .Values.app.defaultOrgID }}admin (senha via env AIPP_BOOTSTRAP_ADMIN_PASSWORD).
+   DEV_MODE=true → admin bootstrap is automatic on startup. Username:
+   {{ .Values.app.defaultOrgID }}admin (password via env AIPP_BOOTSTRAP_ADMIN_PASSWORD).
    {{- else }}
 
    kubectl -n {{ .Release.Namespace }} exec deploy/{{ include "ai-pool.fullname" . }} -- \
-     env AIPP_BOOTSTRAP_ADMIN_PASSWORD='<strong-password-≥12-chars>' \
-     /aipp --bootstrap-admin-username=admin
+     /aipp --bootstrap-admin-username=admin --bootstrap-admin-password='<strong-password-≥12-chars>'
    {{- end }}
 
 5. {{ if .Values.ingress.enabled -}}
