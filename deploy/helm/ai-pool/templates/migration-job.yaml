@@ -128,19 +128,35 @@ spec:
                   name: {{ include "ai-pool.dbSecretName" . }}
                   key: {{ .Values.database.secretKey }}
                   optional: false
-            # DEV_MODE=false garante que config.Validate NÃO exija KEK/pepper
-            # (migrate-only ignora esses; DEV_MODE controla validação).
+            # DEV_MODE=false ativa validação de produção. Migrate-only não usa
+            # KEK/pepper, mas config.Validate exige os campos preenchidos.
+            # Montamos o mesmo Secret do Deployment em /etc/aipp (readOnly).
             - name: DEV_MODE
               value: "false"
+            - name: SSRF_ALLOW_HTTP
+              value: "false"
+            - name: KEK_PATH
+              value: /etc/aipp/kek
+            - name: TOKEN_PEPPER_PATH
+              value: /etc/aipp/token_pepper
             # Log em JSON para parsear fácil em stack (Loki/CloudWatch).
             - name: LOG_FORMAT
               value: "json"
             - name: LOG_LEVEL
               value: "info"
+          volumeMounts:
+            - name: app-secrets
+              mountPath: /etc/aipp
+              readOnly: true
           resources:
             {{- toYaml .Values.migrations.resources | nindent 12 }}
           securityContext:
             {{- toYaml .Values.containerSecurityContext | nindent 12 }}
+      volumes:
+        - name: app-secrets
+          secret:
+            secretName: {{ include "ai-pool.appSecretName" . }}
+            defaultMode: 0400
 {{- with .Values.image.pullSecrets }}
       imagePullSecrets:
 {{- toYaml . | nindent 8 }}
