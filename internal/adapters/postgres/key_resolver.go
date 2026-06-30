@@ -5,8 +5,8 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/hacklabr/ai-pool/internal/domain"
+	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 // KeyResolver implementa domain.KeyResolver usando os repositórios PostgreSQL.

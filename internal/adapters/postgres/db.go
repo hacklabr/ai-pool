@@ -6,8 +6,8 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/hacklabr/ai-pool/internal/config"
+	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 // NewPool cria e configura um pool de conexões pgxpool com defaults sensatos.

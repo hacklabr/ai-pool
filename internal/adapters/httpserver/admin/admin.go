@@ -22,9 +22,9 @@ import (
 	"io/fs"
 	"net/http"
 
-	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/hacklabr/ai-pool/internal/adapters/postgres"
 	"github.com/hacklabr/ai-pool/internal/domain"
+	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 // App carrega todas as dependências da admin/UI via struct (DI explícita).
