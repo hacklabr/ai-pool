@@ -117,12 +117,19 @@ jobs:
       # gosec — SAST para Go. Detecta sql injection, weak crypto, hardcoded
       # creds, etc. Default exit code 1 = encontrou findings. Forçamos fail
       # em severity HIGH.
+      #
+      # NOTA: NÃO usamos mais `securego/gosec@master` (action Docker) porque
+      # o container embute Go 1.26.3 e o go.mod exige 1.26.4 → gosec não
+      # conseguia carregar packages (GOTOOLCHAIN=local dentro do container
+      # não baixa versão nova). Instalando via `go install` usamos o mesmo
+      # Go do setup-go acima.
+      - name: Install gosec
+        run: go install github.com/securego/gosec/v2/cmd/gosec@latest
+
       - name: gosec
-        uses: securego/gosec@master
-        with:
-          # -severity medium: fail em MEDIUM/HIGH/CRITICAL (conservador).
-          # Ajuste para `low` se quiser ser mais estrito.
-          args: -severity medium -exclude-dir=test ./...
+        # -severity medium: fail em MEDIUM/HIGH/CRITICAL (conservador).
+        # Ajuste para `low` se quiser ser mais estrito.
+        run: gosec -severity medium -exclude-dir=test ./...
 
       # govulncheck — escaneia go.mod/go.sum contra o Vuln DB oficial do Go.
       # Reporta apenas vulns que AFETAM o código (não deps não-usadas).
@@ -140,6 +147,9 @@ jobs:
     name: Docker build + Trivy scan
     runs-on: ubuntu-latest
     permissions:
+      # `permissions:` no nível do job SUBSTITUI (não estende) o do workflow.
+      # Sem contents:read, o checkout falha em repositórios privados.
+      contents: read
       security-events: write  # para upload SARIF do trivy (opcional).
     steps:
       - name: Checkout
@@ -202,8 +212,12 @@ jobs:
         run: helm lint deploy/helm/ai-pool
 
       - name: helm template — smoke (database.url inline)
+        # Smoke testa o caminho "DB externo": postgresql.enabled=false +
+        # database.url inline. Se deixarmos o subchart ON (default), o chart
+        # exige postgresql.auth.password e falha (ver _helpers.tpl).
         run: |
           helm template ai-pool deploy/helm/ai-pool \
+            --set postgresql.enabled=false \
             --set database.url="postgres://u:p@db:5432/aipp?sslmode=require" \
             > /tmp/template-smoke.yaml
           echo "Rendered $(grep -c '^kind:' /tmp/template-smoke.yaml) resources"
