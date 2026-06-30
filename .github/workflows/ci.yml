@@ -15,7 +15,10 @@
 #   2. security     → gosec, govulncheck (HIGH/CRITICAL = fail).
 #   3. docker       → docker build + trivy image scan (CRITICAL = fail).
 #   4. helm         → helm lint + helm template (2 cenários).
-#   5. release      → on tag v*: build + push para GHCR (OIDC).
+#   5. release      → build + push para GHCR (OIDC). Tags:
+#                     - push em main   → ghcr.io/<repo>:<sha-curto> (ex.: e0f308e)
+#                     - tag v*         → ghcr.io/<repo>:<tag> (ex.: v0.1.0) + latest
+#                     Sempre após os 4 gates passarem (não publica imagem quebrada).
 #   6. deploy       → TEMPLATE comentado (sem cluster real no MVP).
 #
 # Concurrency: 1 deploy por branch por vez (impede runs concorrentes que
@@ -219,12 +222,18 @@ jobs:
           echo "Rendered $(grep -c '^kind:' /tmp/template-prod.yaml) resources"
 
   # ==========================================================================
-  # 5. release — on tag v*: build + push imagem para GHCR via OIDC.
+  # 5. release — build + push imagem para GHCR via OIDC.
+  #
+  # Triggers (após gates):
+  #   - push em main       → tag = sha-curto (ex.: e0f308e)
+  #   - tag v*             → tag = nome-da-tag (ex.: v0.1.0) + latest
+  #
+  # Em PR: não roda (não publica imagem de PR).
   # ==========================================================================
   release:
     name: Release image to GHCR
     needs: [lint-test, security, docker, helm]
-    if: startsWith(github.ref, 'refs/tags/v')
+    if: github.event_name != 'pull_request' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v'))
     runs-on: ubuntu-latest
     permissions:
       # OIDC para trocar token sem PAT. GHCR aceita GITHUB_TOKEN com packages:write.
@@ -247,18 +256,21 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Docker metadata
-        # Gera tags automaticamente: semver (v1.2.3 → 1.2.3, 1.2, 1), SHA, latest.
+        # Gera tags conforme o evento:
+        #   - push em main: sha-curto (ex.: e0f308e). Sem latest, sem nome de branch.
+        #   - tag v*: nome-da-tag como-is (ex.: v0.1.0 — mantém prefixo v) + latest
+        #             em releases estáveis (exclui -rc, -beta, -alpha).
         id: meta
         uses: docker/metadata-action@v5
         with:
           images: ghcr.io/${{ github.repository }}
           tags: |
-            type=semver,pattern={{version}}
-            type=semver,pattern={{major}}.{{minor}}
-            type=semver,pattern={{major}}
-            type=sha,prefix=sha-,format=short
-            # `latest` aponta para a última release estável (sem pré-release).
-            type=raw,value=latest,enable=${{ !contains(github.ref, '-rc') && !contains(github.ref, '-beta') }}
+            # SHA curto — SÓ em push para main (format=short = 7 chars).
+            type=sha,format=short,enable=${{ github.ref == 'refs/heads/main' }}
+            # Nome da tag como-is (v0.1.0) — SÓ em push de tag.
+            type=ref,event=tag
+            # latest — SÓ em tag estável (sem pre-release suffix).
+            type=raw,value=latest,enable=${{ startsWith(github.ref, 'refs/tags/v') && !contains(github.ref, '-rc') && !contains(github.ref, '-beta') && !contains(github.ref, '-alpha') }}
 
       - name: Build and push
         uses: docker/build-push-action@v6
