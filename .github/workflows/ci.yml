@@ -316,44 +316,70 @@ jobs:
       #   run: cosign sign --yes ghcr.io/${{ github.repository }}@${{ steps.meta.outputs.digest }}
 
   # ==========================================================================
-  # 6. deploy — TEMPLATE COMENTADO (sem cluster real no MVP).
-  # Em produção, configurar KUBE_CONFIG secret ou OIDC provider para o cluster
-  # alvo. Descomentar e ajustar quando houver cluster de staging/prod.
+  # 6. deploy — DEV e PROD via Helm upgrade.
+  #    main  → DEV  (imagem :<sha-curto>)
+  #    tag v* → PROD (imagem :<tag>)
   # ==========================================================================
-  #
-  # deploy-staging:
-  #   name: Deploy to staging (Helm)
-  #   needs: [release]
-  #   if: startsWith(github.ref, 'refs/tags/v')
-  #   runs-on: ubuntu-latest
-  #   environment:
-  #     name: staging  # require review/approval manual antes de rodar.
-  #   steps:
-  #     - name: Checkout
-  #       uses: actions/checkout@v4
-  #
-  #     - name: Setup Helm
-  #       uses: azure/setup-helm@v4
-  #
-  #     - name: Configure kubectl (OIDC or kubeconfig)
-  #       # Opção A: AWS EKS via OIDC (aws-actions/configure-aws-credentials).
-  #       # Opção B: GCP GKE via Workload Identity.
-  #       # Opção C: kubeconfig em secret (menos recomendado).
-  #       uses: azure/k8s-set-context@v4
-  #       with:
-  #         kubeconfig: ${{ secrets.KUBECONFIG_STAGING }}
-  #
-  #     - name: Helm upgrade --install
-  #       run: |
-  #         helm upgrade --install ai-pool deploy/helm/ai-pool \
-  #           --namespace ai-pool --create-namespace \
-  #           --set image.tag=${{ github.ref_name }} \
-  #           --set database.existingSecret=ai-pool-db \
-  #           --set ingress.enabled=true \
-  #           --set 'ingress.hosts[0].host=staging.example.com' \
-  #           --wait --timeout 5m
-  #
-  #     - name: Smoke test /healthz
-  #       run: |
-  #         sleep 10
-  #         curl -fsS https://staging.example.com/healthz || exit 1
+
+  deploy-dev:
+    name: Deploy to DEV (Helm)
+    needs: [release]
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    environment:
+      name: dev
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Helm
+        uses: azure/setup-helm@v4
+
+      - name: Configure kubeconfig
+        env:
+          KUBECONFIG_B64: ${{ secrets.KUBECONFIG_DEV }}
+        run: |
+          mkdir -p "$HOME/.kube"
+          echo "$KUBECONFIG_B64" | base64 -d > "$HOME/.kube/config"
+          chmod 600 "$HOME/.kube/config"
+
+      - name: Helm upgrade --install (DEV)
+        env:
+          NAMESPACE: ${{ secrets.NAMESPACE_AIPOOL_DEV }}
+        run: |
+          IMAGE_TAG=$(echo "${{ github.sha }}" | cut -c1-7)
+          helm upgrade --install hacklab-ai-pool deploy/helm/ai-pool \
+            --namespace "$NAMESPACE" --create-namespace \
+            -f deploy/helm/ai-pool/values-dev.yaml \
+            --set image.tag="$IMAGE_TAG" \
+            --wait --timeout 5m
+
+  deploy-prod:
+    name: Deploy to PROD (Helm)
+    needs: [release]
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Helm
+        uses: azure/setup-helm@v4
+
+      - name: Configure kubeconfig
+        env:
+          KUBECONFIG_B64: ${{ secrets.KUBECONFIG_PROD }}
+        run: |
+          mkdir -p "$HOME/.kube"
+          echo "$KUBECONFIG_B64" | base64 -d > "$HOME/.kube/config"
+          chmod 600 "$HOME/.kube/config"
+
+      - name: Helm upgrade --install (PROD)
+        env:
+          NAMESPACE: ${{ secrets.NAMESPACE_AIPOOL_PROD }}
+        run: |
+          helm upgrade --install hacklab-ai-pool deploy/helm/ai-pool \
+            --namespace "$NAMESPACE" --create-namespace \
+            -f deploy/helm/ai-pool/values-prod.yaml \
+            --set image.tag="${{ github.ref_name }}" \
+            --wait --timeout 5m
