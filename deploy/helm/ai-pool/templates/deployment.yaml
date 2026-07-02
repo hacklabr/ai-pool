@@ -21,10 +21,12 @@ spec:
   selector:
     matchLabels:
       {{- include "ai-pool.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: app
   template:
     metadata:
       labels:
         {{- include "ai-pool.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: app
         # annotation hash invalida pods quando config mudou (rolling restart).
       annotations:
         checksum/config: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}

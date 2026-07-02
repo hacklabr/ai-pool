@@ -1,0 +1,164 @@
+{{/* StatefulSet do PostgreSQL — imagem oficial postgres:16-alpine.
+
+     Padrão Hacklab (espelha planoparticipativo/charts/mobi):
+     - StatefulSet (não Deployment) com serviceName apontando para o Service Headless.
+     - PVC "data" via volumeClaimTemplate (storageClassName configurável).
+     - SENHA: lida do Secret "<release>-db" (gerada em postgresql-secret.yaml).
+     - PGDATA em /var/lib/postgresql/data/pgdata (evita initdb em subpath).
+     - helm.sh/resource-policy: common — StatefulSet sobrevive a `helm uninstall`
+       (proteção anti-remoção acidental de dados). Para resetar: deletar
+       StatefulSet + PVC manualmente.
+     - podAnnotations para hooks Velero (backup.velero.io/*).
+     - extraMountPoints loop para volumes extras (PVC, emptyDir, configMap).
+       Ex.: montar /backups (emptyDir) como alvo do pg_dump no pre-hook Velero.
+*/}}
+{{- if .Values.postgresql.enabled -}}
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ include "ai-pool.postgresqlFullname" . }}
+  labels:
+    {{- include "ai-pool.commonLabels" . | nindent 4 }}
+    app.kubernetes.io/component: postgresql
+  annotations:
+    # StatefulSet + PVC NÃO são removidos no `helm uninstall` — proteção
+    # contra acidente. Para resetar completo: deletar manualmente.
+    helm.sh/resource-policy: keep
+spec:
+  serviceName: {{ include "ai-pool.postgresqlFullname" . }}
+  replicas: 1
+  selector:
+    matchLabels:
+      {{- include "ai-pool.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: postgresql
+  template:
+    metadata:
+      labels:
+        {{- include "ai-pool.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: postgresql
+      {{- with .Values.postgresql.podAnnotations }}
+      annotations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+    spec:
+      # PostgreSQL oficial roda como UID 999 (postgres). fsGroup 999 garante
+      # que o volume mount seja owner/group-correct para o processo.
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 999
+        runAsGroup: 999
+        fsGroup: 999
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: postgresql
+          image: {{ .Values.postgresql.image.repository }}:{{ .Values.postgresql.image.tag }}
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: postgresql
+              containerPort: 5432
+              protocol: TCP
+          env:
+            - name: POSTGRES_DB
+              value: {{ default "aipp" .Values.postgresql.auth.database | quote }}
+            - name: POSTGRES_USER
+              value: {{ default "aipp" .Values.postgresql.auth.username | quote }}
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "ai-pool.postgresqlSecretName" . }}
+                  key: password
+                  optional: false
+            # PGDATA em subpath — evita problemas de initdb quando o PV tem
+            # conteúdo prévio (lost+found etc).
+            - name: PGDATA
+              value: /var/lib/postgresql/data/pgdata
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/postgresql/data
+            {{- range .Values.postgresql.extraMountPoints }}
+            - name: {{ .name }}
+              mountPath: {{ .mountPath }}
+              {{- if .subPath }}
+              subPath: {{ .subPath }}
+              {{- end }}
+              {{- if .readOnly }}
+              readOnly: {{ .readOnly }}
+              {{- end }}
+            {{- end }}
+          resources:
+            {{- toYaml .Values.postgresql.resources | nindent 12 }}
+          # Probes via pg_isready — autentica via socket Unix local (sem senha).
+          livenessProbe:
+            exec:
+              command:
+                - pg_isready
+                - -U
+                - {{ default "aipp" .Values.postgresql.auth.username }}
+                - -d
+                - {{ default "aipp" .Values.postgresql.auth.database }}
+            initialDelaySeconds: 30
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 6
+          readinessProbe:
+            exec:
+              command:
+                - pg_isready
+                - -U
+                - {{ default "aipp" .Values.postgresql.auth.username }}
+                - -d
+                - {{ default "aipp" .Values.postgresql.auth.database }}
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 6
+      volumes:
+        {{- range .Values.postgresql.extraMountPoints }}
+        - name: {{ .name }}
+          {{- if kindIs "map" .emptyDir }}
+          emptyDir:
+            {{- toYaml .emptyDir | nindent 12 }}
+          {{- else if .persistentVolumeClaim }}
+          persistentVolumeClaim:
+            {{- toYaml .persistentVolumeClaim | nindent 12 }}
+          {{- else if .configMapName }}
+          configMap:
+            name: {{ .configMapName }}
+            {{- if .defaultMode }}
+            defaultMode: {{ .defaultMode }}
+            {{- end }}
+          {{- else if .secret }}
+          secret:
+            secretName: {{ .secret.secretName }}
+            {{- if .secret.defaultMode }}
+            defaultMode: {{ .secret.defaultMode }}
+            {{- end }}
+          {{- else }}
+          emptyDir: {}
+          {{- end }}
+        {{- end }}
+{{- if .Values.postgresql.primary.persistence.enabled }}
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+        {{- with .Values.postgresql.primary.persistence.annotations }}
+        annotations:
+          {{- toYaml . | nindent 10 }}
+        {{- end }}
+      spec:
+        accessModes:
+          - ReadWriteOnce
+        {{- if .Values.postgresql.primary.persistence.storageClassName }}
+        storageClassName: {{ .Values.postgresql.primary.persistence.storageClassName }}
+        {{- end }}
+        resources:
+          requests:
+            storage: {{ .Values.postgresql.primary.persistence.size }}
+{{- else }}
+        # Sem persistência — emptyDir (dados perdidos no restart do pod).
+        # Útil só para testes efêmeros; NUNCA usar em produção.
+        - name: data
+          emptyDir: {}
+{{- end }}
+{{- end -}}

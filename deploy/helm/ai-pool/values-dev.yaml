@@ -1,0 +1,179 @@
+# =============================================================================
+# values-dev.yaml — AI Provider Pool · Dev Hacklab
+#
+# Uso:
+#   # 0. Criar namespace + Secret KEK (uma única vez; ver INSTALL.md):
+#   kubectl create namespace hacklab-ai-pool
+#   KEK=$(openssl rand -base64 32); PEPPER=$(openssl rand -base64 48)
+#   kubectl -n hacklab-ai-pool create secret generic hacklab-ai-pool-secrets \
+#     --from-literal=kek="$KEK" --from-literal=token_pepper="$PEPPER"
+#
+#   # 1. Instalar:
+#   helm install hacklab-ai-pool deploy/helm/ai-pool \
+#     -n hacklab-ai-pool \
+#     -f deploy/helm/ai-pool/values-dev.yaml
+#
+#   # 2. Atualizar:
+#   helm upgrade hacklab-ai-pool deploy/helm/ai-pool \
+#     -n hacklab-ai-pool \
+#     -f deploy/helm/ai-pool/values-dev.yaml
+#
+# Overrides locais sem commit: use -f values-prod.local.yaml (gitignored).
+# =============================================================================
+
+# === Imagem ===
+# Placeholder até a GitHub Action publicar a tag estável da organização.
+# Substitua repository por ghcr.io/hacklabr/ai-pool (ou equivalente) quando
+# a Action estiver pronta.
+image:
+  repository: ghcr.io/hacklabr/ai-pool
+  tag: ""
+  pullPolicy: IfNotPresent
+  pullSecrets: 
+    - name: ghcr-pull
+# === Réplicas (Opção A: single-replica MVP) ===
+# Manter 1 até atingir os gatilhos do ROADMAP (SLA duro, RPS>50/s, etc.).
+# Subir para ≥2 exige Redis mandatório (ver ROADMAP §1).
+replicaCount: 1
+
+# === App env ===
+app:
+  # PRODUÇÃO — DEV_MODE=false é obrigatório (KEK é checada no startup).
+  devMode: "false"
+  ssrfAllowHTTP: "false"
+
+  # Observabilidade: JSON estruturado p/ stack Loki/Fluent-bit.
+  logLevel: "info"
+  logFormat: "json"
+
+  # Defaults de afinidade/rate-limit.
+  affinityTTL: "30m"
+  affinityMaxPerUser: "50"
+  rateLimitBurst: "10"
+  rateLimitPerMin: "60"
+  defaultOrgID: "1"
+
+  # Graceful shutdown + preStop (rolling zero-downtime).
+  shutdownTimeout: "60s"
+  preStopSleep: "10s"
+
+  # /metrics endpoint (gated; sem Prometheus no cluster ainda).
+  enableMetrics: "false"
+
+  # Paths dos segredos montados como arquivos readOnly via Secret volume
+  # (Secret: hacklab-ai-pool-secrets, criado manualmente ANTES do install).
+  kekPath: /etc/aipp/kek
+  tokenPepperPath: /etc/aipp/token_pepper
+
+# === PostgreSQL — templates nativos (imagem oficial postgres:16-alpine) ===
+postgresql:
+  enabled: true
+
+  image:
+    repository: postgres
+    tag: "16-alpine"
+
+  auth:
+    username: aipp
+    database: aipp
+    # password: vazio → AUTO-GERADA na primeira instalação e persistida via
+    # lookup. Para rotacionar, setar um novo valor aqui (cuidado: app +
+    # migration-job precisam do mesmo Secret, regenerado em conjunto).
+    password: ""
+
+  primary:
+    persistence:
+      enabled: true
+      size: 20Gi
+      # Ceph RBD block (low-latency, RWX não necessário; RWO suficiente).
+      storageClassName: ceph-blockstorage
+      annotations: {}
+
+  resources:
+    requests:
+      cpu: 250m
+      memory: 256Mi
+    limits:
+      cpu: 1000m
+      memory: 1Gi
+
+  # === Velero backup (pre-hook com pg_dump em emptyDir) ===
+  # Funciona com fs-backup do Velero (restic). O pre-hook roda pg_dump para
+  # /backups ANTES do snapshot — garantia de consistência (DB quiescente).
+  # /backups é emptyDir (efêmero) capturado pelo Velero junto com o volume
+  # `data`. Não consome StorageClass adicional.
+  podAnnotations:
+    backup.velero.io/backup-volumes: data,backups
+    pre.hook.backup.velero.io/container: postgresql
+    pre.hook.backup.velero.io/command: '["/bin/sh", "-c", "pg_dump -Fc -U $POSTGRES_USER $POSTGRES_DB > /backups/dump-$(date +%Y%m%d-%H%M%S).pgc"]'
+    pre.hook.backup.velero.io/timeout: "300"
+
+  # Mounts extras no pod do postgres — emptyDir /backups é o alvo do pg_dump.
+  extraMountPoints:
+    - name: backups
+      mountPath: /backups
+      emptyDir: {}
+
+# === Database ===
+# DATABASE_URL é gerada automaticamente no Secret "<release>-db" pelo template
+# postgresql-secret.yaml (em sync com o password). Mantenha existingSecret=""
+# para o chart criar/usar o Secret do postgres embutido.
+database:
+  existingSecret: ""
+  secretKey: DATABASE_URL
+
+# === KEK + token_pepper ===
+# Secret pré-criado manualmente (procedimento no topo deste arquivo e em
+# INSTALL.md). Nome deriva do release name: hacklab-ai-pool → hacklab-ai-pool-secrets.
+# O pod monta este Secret como arquivos readOnly em /etc/aipp/{kek,token_pepper}.
+externalSecret:
+  enabled: false
+
+# === Ingress (nginx-ingress + cert-manager) ===
+ingress:
+  enabled: true
+  className: nginx
+  annotations:
+    # TLS via Let's Encrypt (ClusterIssuer pré-existente no cluster).
+    cert-manager.io/cluster-issuer: letsencrypt-prod
+    # SSE CRÍTICO — sem proxy-buffering:off, streams de chat quebram.
+    nginx.ingress.kubernetes.io/proxy-buffering: "off"
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "3600"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "3600"
+    # NOTE: configuration-snippet removido — ingress controller do cluster
+    # tem snippets desabilitados. As annotations acima são suficientes para
+    # SSE (o ingress-nginx já usa HTTP/1.1 upstream por padrão com
+    # proxy-buffering:off).
+  hosts:
+    - host: dev.llm-pool.hacklab.com.br
+      paths:
+        - path: /
+          pathType: Prefix
+  tls:
+    - secretName: ai-pool-dev-tls
+      hosts:
+        - dev.llm-pool.hacklab.com.br
+
+# === Network Policy (DESATIVADA — cluster Hacklab confiança interna) ===
+# O app já tem defesa em profundidade interna (SSRF blocklist, sanitização
+# de logs, CSRF double-submit). Ativar NetworkPolicy só faz sentido se for
+# limitar blast radius em cluster multi-tenant — não é o caso.
+networkPolicy:
+  enabled: false
+
+# === Resources do pod da APP (proxy LLM — Go, levemente I/O bound) ===
+resources:
+  requests:
+    cpu: 100m
+    memory: 128Mi
+  limits:
+    cpu: 500m
+    memory: 512Mi
+
+# === DB pool config (pgxpool) ===
+# Override do default se precisar de mais conexões (cuidado com max_connections
+# do postgres: default 100, menos os do migration-job, autoscaler, etc.).
+# database:
+#   maxConns: "10"
+#   minConns: "2"
+#   connMaxLifetime: "1h"

@@ -5,7 +5,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/rafael/ai-pool/internal/adapters/postgres"
+	"github.com/hacklabr/ai-pool/internal/adapters/postgres"
 )
 
 // =============================================================================

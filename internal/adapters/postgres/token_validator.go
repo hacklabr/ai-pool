@@ -7,8 +7,8 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/hacklabr/ai-pool/internal/domain"
 	"github.com/jackc/pgx/v5/pgxpool"
-	"github.com/rafael/ai-pool/internal/domain"
 )
 
 // TokenValidator implementa domain.TokenValidator com DB hit por request

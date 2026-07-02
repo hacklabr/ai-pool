@@ -11,6 +11,7 @@ package config
 import (
 	"errors"
 	"fmt"
+	"math"
 	"os"
 	"strconv"
 	"strings"
@@ -100,8 +101,8 @@ func Load() (*Config, error) {
 		PreStopSleep:    getduration("PRESTOP_SLEEP", 10*time.Second),
 
 		DBDSN:             getenv("DATABASE_URL", getenv("DB_DSN", "")),
-		DBMaxConns:        int32(getenvInt("DB_MAX_CONNS", 10)),
-		DBMinConns:        int32(getenvInt("DB_MIN_CONNS", 2)),
+		DBMaxConns:        clampInt32(getenvInt("DB_MAX_CONNS", 10)),
+		DBMinConns:        clampInt32(getenvInt("DB_MIN_CONNS", 2)),
 		DBConnMaxLifetime: getduration("DB_CONN_MAX_LIFETIME", time.Hour),
 
 		KEKPath:           getenv("KEK_PATH", ""),
@@ -202,6 +203,21 @@ func getenvInt(key string, def int) int {
 		}
 	}
 	return def
+}
+
+// clampInt32 converte int para int32 com bounds check, evitando overflow
+// silencioso quando o valor vem de env var (gosec G115). Em 64-bit, int é
+// int64; int32 tem range ±2.1B. Para config de pool DB isso é mais que
+// suficiente, mas clamp previne comportamento indefinido se alguém setar
+// DB_MAX_CONNS=9999999999999.
+func clampInt32(v int) int32 {
+	if v > math.MaxInt32 {
+		return math.MaxInt32
+	}
+	if v < math.MinInt32 {
+		return math.MinInt32
+	}
+	return int32(v)
 }
 
 func getenvInt64(key string, def int64) int64 {

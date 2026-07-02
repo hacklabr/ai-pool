@@ -116,3 +116,49 @@ ExternalSecret name.
 {{- define "ai-pool.externalSecretName" -}}
 {{- printf "%s-eso" (include "ai-pool.fullname" .) -}}
 {{- end -}}
+
+{{/*
+Nome canônico do PostgreSQL StatefulSet/Service/PVC.
+Sempre deriva do fullname. Usado por todos os templates postgresql-*.
+*/}}
+{{- define "ai-pool.postgresqlFullname" -}}
+{{- printf "%s-postgresql" (include "ai-pool.fullname" .) -}}
+{{- end -}}
+
+{{/*
+Nome do Secret do PostgreSQL (senha + DATABASE_URL).
+
+Quando postgresql.enabled=true, este Secret é criado pelo template
+postgresql-secret.yaml com as chaves:
+  - password      (consumida pelo StatefulSet do postgres)
+  - DATABASE_URL  (consumida pela app + migration-job)
+
+Quando database.existingSecret está setado (DB externo/gerenciado),
+retorna o nome do Secret pré-existente (mesma semântica do helper dbSecretName).
+*/}}
+{{- define "ai-pool.postgresqlSecretName" -}}
+{{- if .Values.database.existingSecret -}}
+{{- .Values.database.existingSecret -}}
+{{- else -}}
+{{- printf "%s-db" (include "ai-pool.fullname" .) -}}
+{{- end -}}
+{{- end -}}
+
+{{/*
+DATABASE_URL: construída quando postgresql.enabled=true.
+Usada no postgresql-secret.yaml para gravar a chave DATABASE_URL no Secret.
+Aponta para o Service do postgres criado neste mesmo release.
+
+Fallback: se postgresql.enabled=false, retorna vazio (a URL deve vir de
+database.existingSecret ou database.url).
+*/}}
+{{- define "ai-pool.databaseURL" -}}
+{{- if .Values.postgresql.enabled -}}
+{{- $pgUser := default "aipp" .Values.postgresql.auth.username -}}
+{{- $pgDB := default "aipp" .Values.postgresql.auth.database -}}
+{{- $pgHost := include "ai-pool.postgresqlFullname" . -}}
+{{- printf "postgres://%s:%s@%s:5432/%s?sslmode=disable" $pgUser "__POSTGRES_PASSWORD__" $pgHost $pgDB -}}
+{{- else -}}
+{{- "" -}}
+{{- end -}}
+{{- end -}}

@@ -9,8 +9,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/rafael/ai-pool/internal/config"
-	"github.com/rafael/ai-pool/internal/domain"
+	"github.com/hacklabr/ai-pool/internal/config"
+	"github.com/hacklabr/ai-pool/internal/domain"
 	"log/slog"
 )
 

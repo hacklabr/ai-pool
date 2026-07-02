@@ -7,15 +7,25 @@ Chart:      {{ .Chart.Name }}-{{ .Chart.Version }}
 Image:      {{ .Values.image.repository }}:{{ .Values.image.tag }}
 Replicas:   {{ .Values.replicaCount }}  (Opção A — single-replica MVP)
 
+{{- if .Values.postgresql.enabled }}
+
+PostgreSQL: bundled (imagem oficial postgres:{{ .Values.postgresql.image.tag }})
+  Service:    {{ include "ai-pool.postgresqlFullname" . }}:5432
+  Secret:     {{ include "ai-pool.postgresqlSecretName" . }}  (keys: password, DATABASE_URL)
+  PVC:        {{ include "ai-pool.postgresqlFullname" . }}-data-0 (storageClass={{ .Values.postgresql.primary.persistence.storageClassName | default "<cluster-default>" }}, size={{ .Values.postgresql.primary.persistence.size }})
+  {{- if .Values.postgresql.podAnnotations }}
+  Velero ann: {{ range $k, $v := .Values.postgresql.podAnnotations }}{{ $k }}={{ $v }} {{ end }}
+  {{- end }}
+{{- end }}
+
 1. Verify the migration Job completed successfully:
 
    kubectl -n {{ .Release.Namespace }} logs job/{{ include "ai-pool.migrationJobName" . }} --tail=-1
-   # Look for: "OK: schema at version N (dirty=false)."
+   # Look for: "migrations applied successfully" + schema version
 
-2. Verify the pod is Running and Ready:
+2. Verify pods are Running and Ready (app + postgres):
 
    kubectl -n {{ .Release.Namespace }} get pods -l "app.kubernetes.io/instance={{ .Release.Name }}"
-   # Expect: STATUS=Running, READY=1/1
 
 3. Smoke-test the HTTP server (port-forward):
 
@@ -23,13 +33,15 @@ Replicas:   {{ .Values.replicaCount }}  (Opção A — single-replica MVP)
    curl -s http://localhost:8080/healthz    # {"status":"ok"}
    curl -s http://localhost:8080/readyz     # {"status":"ready","checks":{...}}
 
-4. Bootstrap the admin user (one-time; idempotent):
+4. Bootstrap the admin user (one-time; idempotent; password ≥12 chars):
+   {{- if eq .Values.app.devMode "true" }}
+   DEV_MODE=true → admin bootstrap is automatic on startup. Username:
+   {{ .Values.app.defaultOrgID }}admin (password via env AIPP_BOOTSTRAP_ADMIN_PASSWORD).
+   {{- else }}
 
    kubectl -n {{ .Release.Namespace }} exec deploy/{{ include "ai-pool.fullname" . }} -- \
-     /aipp --bootstrap-admin-username=admin
-   # Set AIPP_BOOTSTRAP_ADMIN_PASSWORD env to a strong password (≥12 chars) first,
-   # e.g. via `kubectl exec ... -- env AIPP_BOOTSTRAP_ADMIN_PASSWORD='...' /aipp --bootstrap-admin-username=admin`
-   # OR run a one-shot Job with the env (recommended for production).
+     /aipp --bootstrap-admin-username=admin --bootstrap-admin-password='<strong-password-≥12-chars>'
+   {{- end }}
 
 5. {{ if .Values.ingress.enabled -}}
 Access the admin UI at:
@@ -50,8 +62,21 @@ Access the admin UI (port-forward as in step 3):
 
 Notes:
 
-- DATABASE_URL: sourced from {{ if .Values.postgresql.enabled -}}bundled PostgreSQL (subchart bitnami/postgresql — service {{ .Release.Name }}-postgresql){{ else if .Values.database.existingSecret -}}existing Secret "{{ .Values.database.existingSecret }}"{{ else if .Values.externalSecret.enabled -}}ExternalSecret "{{ include "ai-pool.dbSecretName" . }}" (ESO → backend){{ else -}}inline Secret (dev only){{ end }}.
-- KEK + token_pepper: mounted readOnly at /etc/aipp/ from {{ if .Values.externalSecret.enabled -}}ExternalSecret "{{ include "ai-pool.appSecretName" . }}" (ESO){{ else -}}Secret "{{ include "ai-pool.appSecretName" . }}" (manual){{ end }}.
+- DATABASE_URL: sourced from {{ if .Values.postgresql.enabled -}}bundled PostgreSQL (Secret "{{ include "ai-pool.postgresqlSecretName" . }}", password auto-gerada e persistida via lookup){{ else if .Values.database.existingSecret -}}existing Secret "{{ .Values.database.existingSecret }}"{{ else if .Values.externalSecret.enabled -}}ExternalSecret "{{ include "ai-pool.dbSecretName" . }}" (ESO → backend){{ else -}}inline Secret (dev only){{ end }}.
+- KEK + token_pepper: mounted readOnly at /etc/aipp/ from {{ if .Values.externalSecret.enabled -}}ExternalSecret "{{ include "ai-pool.appSecretName" . }}" (ESO){{ else -}}Secret "{{ include "ai-pool.appSecretName" . }}" (MUST be created manually BEFORE install — see INSTALL.md){{ end }}.
+{{- if and (not .Values.externalSecret.enabled) (eq .Values.app.devMode "false") }}
+
+  ⚠️  CRITICAL: in production (DEV_MODE=false), the pod will NOT start if the
+  Secret "{{ include "ai-pool.appSecretName" . }}" is missing. Create it first:
+
+     KEK=$(openssl rand -base64 32)
+     PEPPER=$(openssl rand -base64 48)
+     kubectl -n {{ .Release.Namespace }} create secret generic {{ include "ai-pool.appSecretName" . }} \
+       --from-literal=kek="$KEK" \
+       --from-literal=token_pepper="$PEPPER"
+     # SALVAR KEK E PEPPER EM COFRE OFFLINE (perdeu = perdeu todas as chaves)
+{{- end }}
+
 - NetworkPolicy: {{ if .Values.networkPolicy.enabled -}}ENABLED (egress restricto a HTTPS externo + DB + DNS){{ else -}}DISABLED (cluster default){{ end }}.
 - Ingress: {{ if .Values.ingress.enabled -}}ENABLED with SSE annotations (proxy-buffering: off, 1h timeouts){{ else -}}DISABLED — set ingress.enabled=true e defina ingress.host{{ end }}.
 
@@ -61,3 +86,9 @@ See ROADMAP.md for triggers and migration path.
 Rollback:
 
    helm rollback {{ .Release.Name }} --namespace {{ .Release.Namespace }}
+
+Note: PostgreSQL StatefulSet + PVC have `helm.sh/resource-policy: common` and
+will NOT be removed by `helm uninstall` (data preservation). To reset:
+
+   kubectl -n {{ .Release.Namespace }} delete statefulset {{ include "ai-pool.postgresqlFullname" . }}
+   kubectl -n {{ .Release.Namespace }} delete pvc -l app.kubernetes.io/component=postgresql

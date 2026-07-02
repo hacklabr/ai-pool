@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	webassets "github.com/rafael/ai-pool/web"
+	webassets "github.com/hacklabr/ai-pool/web"
 )
 
 // TestTemplateRenderer_LoadFromEmbedFS valida que TODOS os templates do

@@ -5,7 +5,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/rafael/ai-pool/internal/domain"
+	"github.com/hacklabr/ai-pool/internal/domain"
 )
 
 // memorySessionStore implementa domain.SessionStore com map protegido por

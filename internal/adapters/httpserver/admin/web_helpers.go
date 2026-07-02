@@ -57,6 +57,9 @@ type userContext = sessionContext
 // Flags: HttpOnly (sem acesso JS), Secure (apenas HTTPS em prod),
 // SameSite=Lax, Path=/. MaxAge alinhado ao TTL do SessionStore.
 func (a *App) setSessionCookie(w http.ResponseWriter, sessID string) {
+	// #nosec G124 -- Secure/HttpOnly/SameSite são injetados via a.cookieCfg
+	// (configurado em buildCookieConfig a partir do modo dev/prod). gosec só
+	// detecta literais estáticos, não consegue ver a atribuição via struct.
 	c := &http.Cookie{
 		Name:     a.cookieCfg.SessionName,
 		Value:    sessID,
@@ -72,6 +75,7 @@ func (a *App) setSessionCookie(w http.ResponseWriter, sessID string) {
 
 // clearSessionCookie invalida o cookie setando MaxAge=-1 + valor vazio.
 func (a *App) clearSessionCookie(w http.ResponseWriter) {
+	// #nosec G124 -- idem setSessionCookie: flags vindas de a.cookieCfg.
 	c := &http.Cookie{
 		Name:     a.cookieCfg.SessionName,
 		Value:    "",
@@ -88,6 +92,8 @@ func (a *App) clearSessionCookie(w http.ResponseWriter) {
 // setCSRFCookie escreve o cookie CSRF (NÃO-HttpOnly — JS precisa ler para
 // incluir no header X-CSRF-Token em mutações). Double-submit pattern.
 func (a *App) setCSRFCookie(w http.ResponseWriter, token string) {
+	// #nosec G124 -- Secure/SameSite via a.cookieCfg. HttpOnly=false é por
+	// design (double-submit CSRF pattern exige que JS leia o token).
 	c := &http.Cookie{
 		Name:     a.cookieCfg.CSRFName,
 		Value:    token,
@@ -103,6 +109,7 @@ func (a *App) setCSRFCookie(w http.ResponseWriter, token string) {
 
 // clearCSRFCookie invalida o cookie CSRF.
 func (a *App) clearCSRFCookie(w http.ResponseWriter) {
+	// #nosec G124 -- idem setCSRFCookie.
 	c := &http.Cookie{
 		Name:     a.cookieCfg.CSRFName,
 		Value:    "",

@@ -11,7 +11,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/rafael/ai-pool/internal/domain"
+	"github.com/hacklabr/ai-pool/internal/domain"
 )
 
 // =============================================================================

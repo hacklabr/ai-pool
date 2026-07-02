@@ -7,9 +7,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/rafael/ai-pool/internal/adapters/postgres"
-	"github.com/rafael/ai-pool/internal/domain"
-	"github.com/rafael/ai-pool/internal/observability"
+	"github.com/hacklabr/ai-pool/internal/adapters/postgres"
+	"github.com/hacklabr/ai-pool/internal/domain"
+	"github.com/hacklabr/ai-pool/internal/observability"
 )
 
 // =============================================================================

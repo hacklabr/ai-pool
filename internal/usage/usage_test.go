@@ -11,9 +11,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/hacklabr/ai-pool/internal/adapters/postgres"
+	"github.com/hacklabr/ai-pool/internal/domain"
 	"github.com/jackc/pgx/v5/pgtype"
-	"github.com/rafael/ai-pool/internal/adapters/postgres"
-	"github.com/rafael/ai-pool/internal/domain"
 )
 
 // =============================================================================

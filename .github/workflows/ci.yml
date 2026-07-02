@@ -15,7 +15,10 @@
 #   2. security     → gosec, govulncheck (HIGH/CRITICAL = fail).
 #   3. docker       → docker build + trivy image scan (CRITICAL = fail).
 #   4. helm         → helm lint + helm template (2 cenários).
-#   5. release      → on tag v*: build + push para GHCR (OIDC).
+#   5. release      → build + push para GHCR (OIDC). Tags:
+#                     - push em main   → ghcr.io/<repo>:<sha-curto> (ex.: e0f308e)
+#                     - tag v*         → ghcr.io/<repo>:<tag> (ex.: v0.1.0) + latest
+#                     Sempre após os 4 gates passarem (não publica imagem quebrada).
 #   6. deploy       → TEMPLATE comentado (sem cluster real no MVP).
 #
 # Concurrency: 1 deploy por branch por vez (impede runs concorrentes que
@@ -114,12 +117,19 @@ jobs:
       # gosec — SAST para Go. Detecta sql injection, weak crypto, hardcoded
       # creds, etc. Default exit code 1 = encontrou findings. Forçamos fail
       # em severity HIGH.
+      #
+      # NOTA: NÃO usamos mais `securego/gosec@master` (action Docker) porque
+      # o container embute Go 1.26.3 e o go.mod exige 1.26.4 → gosec não
+      # conseguia carregar packages (GOTOOLCHAIN=local dentro do container
+      # não baixa versão nova). Instalando via `go install` usamos o mesmo
+      # Go do setup-go acima.
+      - name: Install gosec
+        run: go install github.com/securego/gosec/v2/cmd/gosec@latest
+
       - name: gosec
-        uses: securego/gosec@master
-        with:
-          # -severity medium: fail em MEDIUM/HIGH/CRITICAL (conservador).
-          # Ajuste para `low` se quiser ser mais estrito.
-          args: -severity medium -exclude-dir=test ./...
+        # -severity medium: fail em MEDIUM/HIGH/CRITICAL (conservador).
+        # Ajuste para `low` se quiser ser mais estrito.
+        run: gosec -severity medium -exclude-dir=test ./...
 
       # govulncheck — escaneia go.mod/go.sum contra o Vuln DB oficial do Go.
       # Reporta apenas vulns que AFETAM o código (não deps não-usadas).
@@ -137,6 +147,9 @@ jobs:
     name: Docker build + Trivy scan
     runs-on: ubuntu-latest
     permissions:
+      # `permissions:` no nível do job SUBSTITUI (não estende) o do workflow.
+      # Sem contents:read, o checkout falha em repositórios privados.
+      contents: read
       security-events: write  # para upload SARIF do trivy (opcional).
     steps:
       - name: Checkout
@@ -199,15 +212,22 @@ jobs:
         run: helm lint deploy/helm/ai-pool
 
       - name: helm template — smoke (database.url inline)
+        # Smoke testa o caminho "DB externo": postgresql.enabled=false +
+        # database.url inline. Se deixarmos o subchart ON (default), o chart
+        # exige postgresql.auth.password e falha (ver _helpers.tpl).
         run: |
           helm template ai-pool deploy/helm/ai-pool \
+            --set postgresql.enabled=false \
             --set database.url="postgres://u:p@db:5432/aipp?sslmode=require" \
             > /tmp/template-smoke.yaml
           echo "Rendered $(grep -c '^kind:' /tmp/template-smoke.yaml) resources"
 
       - name: helm template — full prod (ESO + ingress + networkPolicy)
+        # Cenário prod: subchart ON (postgresql.enabled=true default) exige
+        # auth.password. Setamos dummy value só pro template renderizar.
         run: |
           helm template ai-pool deploy/helm/ai-pool \
+            --set postgresql.auth.password=ci-dummy \
             --set externalSecret.enabled=true \
             --set externalSecret.secretStoreRef.name=vault-backend \
             --set ingress.enabled=true \
@@ -219,12 +239,18 @@ jobs:
           echo "Rendered $(grep -c '^kind:' /tmp/template-prod.yaml) resources"
 
   # ==========================================================================
-  # 5. release — on tag v*: build + push imagem para GHCR via OIDC.
+  # 5. release — build + push imagem para GHCR via OIDC.
+  #
+  # Triggers (após gates):
+  #   - push em main       → tag = sha-curto (ex.: e0f308e)
+  #   - tag v*             → tag = nome-da-tag (ex.: v0.1.0) + latest
+  #
+  # Em PR: não roda (não publica imagem de PR).
   # ==========================================================================
   release:
     name: Release image to GHCR
     needs: [lint-test, security, docker, helm]
-    if: startsWith(github.ref, 'refs/tags/v')
+    if: github.event_name != 'pull_request' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v'))
     runs-on: ubuntu-latest
     permissions:
       # OIDC para trocar token sem PAT. GHCR aceita GITHUB_TOKEN com packages:write.
@@ -247,18 +273,22 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Docker metadata
-        # Gera tags automaticamente: semver (v1.2.3 → 1.2.3, 1.2, 1), SHA, latest.
+        # Gera tags conforme o evento:
+        #   - push em main: sha-curto (ex.: e0f308e). Sem latest, sem nome de branch.
+        #   - tag v*: nome-da-tag como-is (ex.: v0.1.0 — mantém prefixo v) + latest
+        #             em releases estáveis (exclui -rc, -beta, -alpha).
         id: meta
         uses: docker/metadata-action@v5
         with:
           images: ghcr.io/${{ github.repository }}
           tags: |
-            type=semver,pattern={{version}}
-            type=semver,pattern={{major}}.{{minor}}
-            type=semver,pattern={{major}}
-            type=sha,prefix=sha-,format=short
-            # `latest` aponta para a última release estável (sem pré-release).
-            type=raw,value=latest,enable=${{ !contains(github.ref, '-rc') && !contains(github.ref, '-beta') }}
+            # SHA curto SEM prefixo (ex.: 956beea). prefix= remove o "sha-" default.
+            # SÓ em push para main.
+            type=sha,format=short,prefix=,enable=${{ github.ref == 'refs/heads/main' }}
+            # Nome da tag como-is (v0.1.0) — SÓ em push de tag.
+            type=ref,event=tag
+            # latest — SÓ em tag estável (sem pre-release suffix).
+            type=raw,value=latest,enable=${{ startsWith(github.ref, 'refs/tags/v') && !contains(github.ref, '-rc') && !contains(github.ref, '-beta') && !contains(github.ref, '-alpha') }}
 
       - name: Build and push
         uses: docker/build-push-action@v6
@@ -286,44 +316,70 @@ jobs:
       #   run: cosign sign --yes ghcr.io/${{ github.repository }}@${{ steps.meta.outputs.digest }}
 
   # ==========================================================================
-  # 6. deploy — TEMPLATE COMENTADO (sem cluster real no MVP).
-  # Em produção, configurar KUBE_CONFIG secret ou OIDC provider para o cluster
-  # alvo. Descomentar e ajustar quando houver cluster de staging/prod.
+  # 6. deploy — DEV e PROD via Helm upgrade.
+  #    main  → DEV  (imagem :<sha-curto>)
+  #    tag v* → PROD (imagem :<tag>)
   # ==========================================================================
-  #
-  # deploy-staging:
-  #   name: Deploy to staging (Helm)
-  #   needs: [release]
-  #   if: startsWith(github.ref, 'refs/tags/v')
-  #   runs-on: ubuntu-latest
-  #   environment:
-  #     name: staging  # require review/approval manual antes de rodar.
-  #   steps:
-  #     - name: Checkout
-  #       uses: actions/checkout@v4
-  #
-  #     - name: Setup Helm
-  #       uses: azure/setup-helm@v4
-  #
-  #     - name: Configure kubectl (OIDC or kubeconfig)
-  #       # Opção A: AWS EKS via OIDC (aws-actions/configure-aws-credentials).
-  #       # Opção B: GCP GKE via Workload Identity.
-  #       # Opção C: kubeconfig em secret (menos recomendado).
-  #       uses: azure/k8s-set-context@v4
-  #       with:
-  #         kubeconfig: ${{ secrets.KUBECONFIG_STAGING }}
-  #
-  #     - name: Helm upgrade --install
-  #       run: |
-  #         helm upgrade --install ai-pool deploy/helm/ai-pool \
-  #           --namespace ai-pool --create-namespace \
-  #           --set image.tag=${{ github.ref_name }} \
-  #           --set database.existingSecret=ai-pool-db \
-  #           --set ingress.enabled=true \
-  #           --set 'ingress.hosts[0].host=staging.example.com' \
-  #           --wait --timeout 5m
-  #
-  #     - name: Smoke test /healthz
-  #       run: |
-  #         sleep 10
-  #         curl -fsS https://staging.example.com/healthz || exit 1
+
+  deploy-dev:
+    name: Deploy to DEV (Helm)
+    needs: [release]
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    environment:
+      name: dev
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Helm
+        uses: azure/setup-helm@v4
+
+      - name: Configure kubeconfig
+        env:
+          KUBECONFIG_B64: ${{ secrets.KUBECONFIG_DEV }}
+        run: |
+          mkdir -p "$HOME/.kube"
+          echo "$KUBECONFIG_B64" | base64 -d > "$HOME/.kube/config"
+          chmod 600 "$HOME/.kube/config"
+
+      - name: Helm upgrade --install (DEV)
+        env:
+          NAMESPACE: ${{ secrets.NAMESPACE_AIPOOL_DEV }}
+        run: |
+          IMAGE_TAG=$(echo "${{ github.sha }}" | cut -c1-7)
+          helm upgrade --install hacklab-ai-pool deploy/helm/ai-pool \
+            --namespace "$NAMESPACE" --create-namespace \
+            -f deploy/helm/ai-pool/values-dev.yaml \
+            --set image.tag="$IMAGE_TAG" \
+            --wait --timeout 5m
+
+  deploy-prod:
+    name: Deploy to PROD (Helm)
+    needs: [release]
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Helm
+        uses: azure/setup-helm@v4
+
+      - name: Configure kubeconfig
+        env:
+          KUBECONFIG_B64: ${{ secrets.KUBECONFIG_PROD }}
+        run: |
+          mkdir -p "$HOME/.kube"
+          echo "$KUBECONFIG_B64" | base64 -d > "$HOME/.kube/config"
+          chmod 600 "$HOME/.kube/config"
+
+      - name: Helm upgrade --install (PROD)
+        env:
+          NAMESPACE: ${{ secrets.NAMESPACE_AIPOOL_PROD }}
+        run: |
+          helm upgrade --install hacklab-ai-pool deploy/helm/ai-pool \
+            --namespace "$NAMESPACE" --create-namespace \
+            -f deploy/helm/ai-pool/values-prod.yaml \
+            --set image.tag="${{ github.ref_name }}" \
+            --wait --timeout 5m
