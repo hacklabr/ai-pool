@@ -120,6 +120,7 @@ func (r *TokenRepo) Revoke(ctx context.Context, orgID domain.OrganizationID, id 
 // Não retorna o token_hmac (secredo) — apenas metadados.
 type TokenListItem struct {
 	ID         domain.ID
+	UserID     domain.ID
 	KeyID      string
 	Name       string
 	Status     domain.APITokenStatus
@@ -131,7 +132,7 @@ type TokenListItem struct {
 
 func (r *TokenRepo) ListByUser(ctx context.Context, orgID domain.OrganizationID, userID domain.ID) ([]TokenListItem, error) {
 	const q = `
-		SELECT id, key_id, name, status, created_at, expires_at, last_used_at, revoked_at
+		SELECT id, user_id, key_id, name, status, created_at, expires_at, last_used_at, revoked_at
 		FROM api_tokens
 		WHERE organization_id = $1 AND user_id = $2
 		ORDER BY created_at DESC`
@@ -150,7 +151,7 @@ func (r *TokenRepo) ListByUser(ctx context.Context, orgID domain.OrganizationID,
 			lastUsedT pgtype.Timestamptz
 			revokedT  pgtype.Timestamptz
 		)
-		if err := rows.Scan(&it.ID, &it.KeyID, &it.Name, &status, &it.CreatedAt,
+		if err := rows.Scan(&it.ID, &it.UserID, &it.KeyID, &it.Name, &status, &it.CreatedAt,
 			&expiresT, &lastUsedT, &revokedT); err != nil {
 			return nil, fmt.Errorf("TokenRepo.ListByUser scan: %w", err)
 		}
@@ -164,6 +165,70 @@ func (r *TokenRepo) ListByUser(ctx context.Context, orgID domain.OrganizationID,
 		return nil, fmt.Errorf("TokenRepo.ListByUser rows: %w", err)
 	}
 	return items, nil
+}
+
+// ListAll retorna todos os tokens da organização (admin), com user_id para
+// identificar o dono. Não expõe token_hmac.
+func (r *TokenRepo) ListAll(ctx context.Context, orgID domain.OrganizationID, userID *domain.ID) ([]TokenListItem, error) {
+	var q string
+	var args []any
+	if userID != nil {
+		q = `
+			SELECT id, user_id, key_id, name, status, created_at, expires_at, last_used_at, revoked_at
+			FROM api_tokens
+			WHERE organization_id = $1 AND user_id = $2
+			ORDER BY created_at DESC`
+		args = []any{int64(orgID), int64(*userID)}
+	} else {
+		q = `
+			SELECT id, user_id, key_id, name, status, created_at, expires_at, last_used_at, revoked_at
+			FROM api_tokens
+			WHERE organization_id = $1
+			ORDER BY created_at DESC`
+		args = []any{int64(orgID)}
+	}
+	rows, err := r.pool.Query(ctx, q, args...)
+	if err != nil {
+		return nil, fmt.Errorf("TokenRepo.ListAll: %w", err)
+	}
+	defer rows.Close()
+
+	var items []TokenListItem
+	for rows.Next() {
+		var (
+			it        TokenListItem
+			status    string
+			expiresT  pgtype.Timestamptz
+			lastUsedT pgtype.Timestamptz
+			revokedT  pgtype.Timestamptz
+		)
+		if err := rows.Scan(&it.ID, &it.UserID, &it.KeyID, &it.Name, &status, &it.CreatedAt,
+			&expiresT, &lastUsedT, &revokedT); err != nil {
+			return nil, fmt.Errorf("TokenRepo.ListAll scan: %w", err)
+		}
+		it.Status = domain.APITokenStatus(status)
+		it.ExpiresAt = timestamptzToPtr(expiresT)
+		it.LastUsedAt = timestamptzToPtr(lastUsedT)
+		it.RevokedAt = timestamptzToPtr(revokedT)
+		items = append(items, it)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("TokenRepo.ListAll rows: %w", err)
+	}
+	return items, nil
+}
+
+// Delete remove um token fisicamente. Usado pelo admin.
+func (r *TokenRepo) Delete(ctx context.Context, orgID domain.OrganizationID, id domain.ID) error {
+	const q = `DELETE FROM api_tokens WHERE organization_id = $1 AND id = $2`
+	tag, err := r.pool.Exec(ctx, q, int64(orgID), int64(id))
+	if err != nil {
+		return fmt.Errorf("TokenRepo.Delete: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrNotFound
+	}
+	return nil
 }
 
 // TouchLastUsedBatch atualiza last_used_at (e opcionalmente last_used_ip) para

@@ -1,6 +1,7 @@
 package admin
 
 import (
+	"errors"
 	"net/http"
 	"strings"
 	"time"
@@ -151,6 +152,162 @@ func (a *App) handleAdminCreateModel(w http.ResponseWriter, r *http.Request) {
 		"provider_id": req.ProviderID,
 		"name":        req.Name,
 	})
+}
+
+// updateModelRequest payload de PATCH /api/web/admin/models/{id}.
+type updateModelRequest struct {
+	Name          string `json:"name"`
+	DisplayName   string `json:"display_name"`
+	ContextWindow *int   `json:"context_window"`
+	IsActive      bool   `json:"is_active"`
+}
+
+func modelFromPath(r *http.Request) (int64, bool) {
+	return pathID(r.URL.Path, "/api/web/admin/models/")
+}
+
+// handleAdminGetModel retorna um modelo pelo ID.
+func (a *App) handleAdminGetModel(w http.ResponseWriter, r *http.Request) {
+	sess := sessionFromContext(r.Context())
+	if sess == nil {
+		writeAPIError(w, http.StatusUnauthorized, "unauthenticated", "session required")
+		return
+	}
+	id, ok := modelFromPath(r)
+	if !ok {
+		writeAPIError(w, http.StatusBadRequest, "bad_request", "invalid model id")
+		return
+	}
+	m, err := postgres.NewModelRepo(a.pool).GetByID(r.Context(), domain.OrganizationID(sess.OrgID), domain.ID(id))
+	if err != nil {
+		if errors.Is(err, postgres.ErrNotFound) {
+			writeAPIError(w, http.StatusNotFound, "not_found", "model not found")
+			return
+		}
+		writeAPIError(w, http.StatusInternalServerError, "internal", "could not load model")
+		return
+	}
+	p, _ := a.providerRepo.GetByID(r.Context(), domain.OrganizationID(sess.OrgID), m.ProviderID)
+	pName := ""
+	pSlug := ""
+	if p != nil {
+		pName = p.Name
+		pSlug = p.Slug
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"model": modelListItem{
+			ID:            int64(m.ID),
+			ProviderID:    int64(m.ProviderID),
+			ProviderName:  pName,
+			ProviderSlug:  pSlug,
+			Name:          m.Name,
+			DisplayName:   m.DisplayName,
+			ContextWindow: m.ContextWindow,
+			IsActive:      m.IsActive,
+			CreatedAt:     m.CreatedAt,
+		},
+	})
+}
+
+// handleAdminUpdateModel atualiza um modelo.
+func (a *App) handleAdminUpdateModel(w http.ResponseWriter, r *http.Request) {
+	sess := sessionFromContext(r.Context())
+	if sess == nil {
+		writeAPIError(w, http.StatusUnauthorized, "unauthenticated", "session required")
+		return
+	}
+	id, ok := modelFromPath(r)
+	if !ok {
+		writeAPIError(w, http.StatusBadRequest, "bad_request", "invalid model id")
+		return
+	}
+	var req updateModelRequest
+	if err := parseJSON(r, &req, 4*1024); err != nil {
+		writeAPIError(w, http.StatusBadRequest, "bad_request", "invalid body")
+		return
+	}
+	req.Name = strings.TrimSpace(req.Name)
+	req.DisplayName = strings.TrimSpace(req.DisplayName)
+	if req.Name == "" {
+		writeAPIError(w, http.StatusBadRequest, "bad_request", "name is required")
+		return
+	}
+	m := &domain.Model{
+		ID:            domain.ID(id),
+		OrgID:         domain.OrganizationID(sess.OrgID),
+		Name:          req.Name,
+		IsActive:      req.IsActive,
+		ContextWindow: req.ContextWindow,
+	}
+	if req.DisplayName != "" {
+		m.DisplayName = &req.DisplayName
+	}
+	if err := postgres.NewModelRepo(a.pool).Update(r.Context(), domain.OrganizationID(sess.OrgID), m); err != nil {
+		if errors.Is(err, postgres.ErrNotFound) {
+			writeAPIError(w, http.StatusNotFound, "not_found", "model not found")
+			return
+		}
+		if errors.Is(err, postgres.ErrConflict) {
+			writeAPIError(w, http.StatusConflict, "model_exists", "model name already exists for this provider")
+			return
+		}
+		writeAPIError(w, http.StatusInternalServerError, "internal", "could not update model")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"id": id})
+}
+
+// handleAdminToggleModelActive ativa/inativa um modelo.
+func (a *App) handleAdminToggleModelActive(w http.ResponseWriter, r *http.Request) {
+	sess := sessionFromContext(r.Context())
+	if sess == nil {
+		writeAPIError(w, http.StatusUnauthorized, "unauthenticated", "session required")
+		return
+	}
+	id, ok := modelFromPath(r)
+	if !ok {
+		writeAPIError(w, http.StatusBadRequest, "bad_request", "invalid model id")
+		return
+	}
+	var req struct {
+		Active bool `json:"active"`
+	}
+	if err := parseJSON(r, &req, 1024); err != nil {
+		writeAPIError(w, http.StatusBadRequest, "bad_request", "invalid body")
+		return
+	}
+	if err := postgres.NewModelRepo(a.pool).SetActive(r.Context(), domain.OrganizationID(sess.OrgID), domain.ID(id), req.Active); err != nil {
+		if errors.Is(err, postgres.ErrNotFound) {
+			writeAPIError(w, http.StatusNotFound, "not_found", "model not found")
+			return
+		}
+		writeAPIError(w, http.StatusInternalServerError, "internal", "could not update model")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]bool{"active": req.Active})
+}
+
+// handleAdminDeleteModel remove um modelo fisicamente.
+func (a *App) handleAdminDeleteModel(w http.ResponseWriter, r *http.Request) {
+	sess := sessionFromContext(r.Context())
+	if sess == nil {
+		writeAPIError(w, http.StatusUnauthorized, "unauthenticated", "session required")
+		return
+	}
+	id, ok := modelFromPath(r)
+	if !ok {
+		writeAPIError(w, http.StatusBadRequest, "bad_request", "invalid model id")
+		return
+	}
+	if err := postgres.NewModelRepo(a.pool).Delete(r.Context(), domain.OrganizationID(sess.OrgID), domain.ID(id)); err != nil {
+		if errors.Is(err, postgres.ErrNotFound) {
+			writeAPIError(w, http.StatusNotFound, "not_found", "model not found")
+			return
+		}
+		writeAPIError(w, http.StatusInternalServerError, "internal", "could not delete model")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"status": "deleted"})
 }
 
 // --- Admin: Modelos (página HTML) -------------------------------------------

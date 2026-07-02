@@ -320,6 +320,63 @@ func (r *KeyRepo) IncrementError(ctx context.Context, orgID domain.OrganizationI
 	return nil
 }
 
+// ListAll retorna todas as chaves da organização (incluindo desabilitadas).
+func (r *KeyRepo) ListAll(ctx context.Context, orgID domain.OrganizationID) ([]domain.ProviderKey, error) {
+	const q = `
+		SELECT id, provider_id, organization_id, label, encrypted_value, encryption_key_id,
+		       status, disabled_reason, disabled_at, disabled_until, error_count,
+		       consecutive_errors, last_error_at, last_error_hint, last_used_at,
+		       user_agent_override, created_at, updated_at
+		FROM provider_keys
+		WHERE organization_id = $1
+		ORDER BY provider_id, label`
+	rows, err := r.pool.Query(ctx, q, int64(orgID))
+	if err != nil {
+		return nil, fmt.Errorf("KeyRepo.ListAll: %w", err)
+	}
+	defer rows.Close()
+
+	var out []domain.ProviderKey
+	for rows.Next() {
+		k, err := scanKey(rows)
+		if err != nil {
+			return nil, fmt.Errorf("KeyRepo.ListAll scan: %w", err)
+		}
+		out = append(out, *k)
+	}
+	return out, rows.Err()
+}
+
+// UpdateMetadata altera apenas rótulo e user_agent_override de uma chave.
+// O valor cifrado NÃO é alterado por este método.
+func (r *KeyRepo) UpdateMetadata(ctx context.Context, orgID domain.OrganizationID, keyID domain.ID, label string, uaOverride *string) error {
+	const q = `
+		UPDATE provider_keys
+		SET label = $3, user_agent_override = $4, updated_at = now()
+		WHERE organization_id = $1 AND id = $2`
+	tag, err := r.pool.Exec(ctx, q, int64(orgID), int64(keyID), label, ptrToText(uaOverride))
+	if err != nil {
+		return fmt.Errorf("KeyRepo.UpdateMetadata: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
+// Delete remove uma chave fisicamente.
+func (r *KeyRepo) Delete(ctx context.Context, orgID domain.OrganizationID, keyID domain.ID) error {
+	const q = `DELETE FROM provider_keys WHERE organization_id = $1 AND id = $2`
+	tag, err := r.pool.Exec(ctx, q, int64(orgID), int64(keyID))
+	if err != nil {
+		return fmt.Errorf("KeyRepo.Delete: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
 // scanKey mapeia coluna→domain.ProviderKey (DRY entre Get* e List*).
 func scanKey(row pgx.Row) (*domain.ProviderKey, error) {
 	var (

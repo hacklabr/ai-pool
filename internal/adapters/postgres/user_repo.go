@@ -120,6 +120,72 @@ func (r *UserRepo) UpdatePassword(ctx context.Context, orgID domain.Organization
 	return nil
 }
 
+// ListAll retorna todos os usuários da organização (ativos e desabilitados).
+func (r *UserRepo) ListAll(ctx context.Context, orgID domain.OrganizationID) ([]domain.User, error) {
+	const q = `
+		SELECT id, organization_id, username, password_hash, role, status, disabled_at, created_at, updated_at
+		FROM users
+		WHERE organization_id = $1
+		ORDER BY username`
+	rows, err := r.pool.Query(ctx, q, int64(orgID))
+	if err != nil {
+		return nil, fmt.Errorf("UserRepo.ListAll: %w", err)
+	}
+	defer rows.Close()
+
+	var out []domain.User
+	for rows.Next() {
+		u, err := scanUser(rows)
+		if err != nil {
+			return nil, fmt.Errorf("UserRepo.ListAll scan: %w", err)
+		}
+		out = append(out, *u)
+	}
+	return out, rows.Err()
+}
+
+// Update altera username, role e status de um usuário. Não altera senha.
+func (r *UserRepo) Update(ctx context.Context, orgID domain.OrganizationID, u *domain.User) error {
+	if u == nil {
+		return errors.New("UserRepo.Update: nil user")
+	}
+	const q = `
+		UPDATE users
+		SET username = $3, role = $4, status = $5, disabled_at = $6, updated_at = now()
+		WHERE organization_id = $1 AND id = $2`
+	tag, err := r.pool.Exec(ctx, q,
+		int64(orgID), int64(u.ID), u.Username, string(u.Role), string(u.Status), ptrToTimestamptz(u.DisabledAt),
+	)
+	if err != nil {
+		if isUniqueViolation(err) {
+			return ErrConflict
+		}
+		return fmt.Errorf("UserRepo.Update: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
+// Delete remove um usuário fisicamente, deletando seus tokens em cascata.
+// O chamador deve garantir que não há tokens ativos ou decidir sobre eles.
+func (r *UserRepo) Delete(ctx context.Context, orgID domain.OrganizationID, id domain.ID) error {
+	// FK física em api_tokens.user_id → users(id); removemos tokens primeiro.
+	if _, err := r.pool.Exec(ctx, `DELETE FROM api_tokens WHERE organization_id = $1 AND user_id = $2`, int64(orgID), int64(id)); err != nil {
+		return fmt.Errorf("UserRepo.Delete: tokens: %w", err)
+	}
+	const q = `DELETE FROM users WHERE organization_id = $1 AND id = $2`
+	tag, err := r.pool.Exec(ctx, q, int64(orgID), int64(id))
+	if err != nil {
+		return fmt.Errorf("UserRepo.Delete: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
 // scanUser é compartilhado por GetByID/GetByUsername. Centraliza o mapeamento
 // coluna→struct (DRY). row implementa a interface mínima pgx.Row.
 func scanUser(row pgx.Row) (*domain.User, error) {

@@ -322,6 +322,280 @@ func (a *App) handleAdminForceEnableKey(w http.ResponseWriter, r *http.Request) 
 	writeJSON(w, http.StatusOK, map[string]string{"status": "enabled"})
 }
 
+// --- Admin: Providers CRUD extras -------------------------------------------
+
+// updateProviderRequest payload de PATCH /api/web/admin/providers/{id}.
+type updateProviderRequest struct {
+	Name              string  `json:"name"`
+	Slug              string  `json:"slug"`
+	BaseURL           string  `json:"base_url"`
+	APISpec           string  `json:"api_spec"`
+	UserAgentOverride *string `json:"user_agent_override"`
+}
+
+func providerFromPath(r *http.Request) (int64, bool) {
+	return pathID(r.URL.Path, "/api/web/admin/providers/")
+}
+
+// handleAdminGetProvider retorna um provider pelo ID.
+func (a *App) handleAdminGetProvider(w http.ResponseWriter, r *http.Request) {
+	sess := sessionFromContext(r.Context())
+	if sess == nil {
+		writeAPIError(w, http.StatusUnauthorized, "unauthenticated", "session required")
+		return
+	}
+	id, ok := providerFromPath(r)
+	if !ok {
+		writeAPIError(w, http.StatusBadRequest, "bad_request", "invalid provider id")
+		return
+	}
+	p, err := a.providerRepo.GetByID(r.Context(), domain.OrganizationID(sess.OrgID), domain.ID(id))
+	if err != nil {
+		if errors.Is(err, postgres.ErrNotFound) {
+			writeAPIError(w, http.StatusNotFound, "not_found", "provider not found")
+			return
+		}
+		writeAPIError(w, http.StatusInternalServerError, "internal", "could not load provider")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"provider": providerListItem{
+			ID:                int64(p.ID),
+			Name:              p.Name,
+			Slug:              p.Slug,
+			BaseURL:           p.BaseURL,
+			APISpec:           p.APISpec,
+			UserAgentOverride: p.UserAgentGlobal,
+			IsActive:          p.IsActive,
+			CreatedAt:         p.CreatedAt,
+		},
+	})
+}
+
+// handleAdminUpdateProvider atualiza um provider.
+func (a *App) handleAdminUpdateProvider(w http.ResponseWriter, r *http.Request) {
+	sess := sessionFromContext(r.Context())
+	if sess == nil {
+		writeAPIError(w, http.StatusUnauthorized, "unauthenticated", "session required")
+		return
+	}
+	id, ok := providerFromPath(r)
+	if !ok {
+		writeAPIError(w, http.StatusBadRequest, "bad_request", "invalid provider id")
+		return
+	}
+	var req updateProviderRequest
+	if err := parseJSON(r, &req, 4*1024); err != nil {
+		writeAPIError(w, http.StatusBadRequest, "bad_request", "invalid body")
+		return
+	}
+	req.Name = strings.TrimSpace(req.Name)
+	req.Slug = strings.TrimSpace(req.Slug)
+	req.BaseURL = strings.TrimSpace(req.BaseURL)
+	if req.Name == "" || req.Slug == "" || req.BaseURL == "" {
+		writeAPIError(w, http.StatusBadRequest, "bad_request", "name, slug and base_url are required")
+		return
+	}
+	if req.APISpec == "" {
+		req.APISpec = "openai"
+	}
+	if err := domain.ValidateProviderURL(req.BaseURL, domain.WithSSRFAllowInsecureHTTP(!a.cookieCfg.Secure)); err != nil {
+		if domain.IsSSRFBlocked(err) {
+			writeAPIError(w, http.StatusBadRequest, "ssrf_blocked", "base_url blocked by SSRF guard")
+			return
+		}
+		writeAPIError(w, http.StatusBadRequest, "dns_error", "could not resolve base_url host")
+		return
+	}
+	p := &domain.Provider{
+		ID:              domain.ID(id),
+		OrgID:           domain.OrganizationID(sess.OrgID),
+		Name:            req.Name,
+		Slug:            req.Slug,
+		BaseURL:         req.BaseURL,
+		APISpec:         req.APISpec,
+		UserAgentGlobal: req.UserAgentOverride,
+	}
+	if err := a.providerRepo.Update(r.Context(), domain.OrganizationID(sess.OrgID), p); err != nil {
+		if errors.Is(err, postgres.ErrNotFound) {
+			writeAPIError(w, http.StatusNotFound, "not_found", "provider not found")
+			return
+		}
+		if errors.Is(err, postgres.ErrConflict) {
+			writeAPIError(w, http.StatusConflict, "slug_taken", "slug already exists")
+			return
+		}
+		writeAPIError(w, http.StatusInternalServerError, "internal", "could not update provider")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"id": id})
+}
+
+// handleAdminToggleProviderActive ativa/inativa um provider.
+func (a *App) handleAdminToggleProviderActive(w http.ResponseWriter, r *http.Request) {
+	sess := sessionFromContext(r.Context())
+	if sess == nil {
+		writeAPIError(w, http.StatusUnauthorized, "unauthenticated", "session required")
+		return
+	}
+	id, ok := providerFromPath(r)
+	if !ok {
+		writeAPIError(w, http.StatusBadRequest, "bad_request", "invalid provider id")
+		return
+	}
+	var req struct {
+		Active bool `json:"active"`
+	}
+	if err := parseJSON(r, &req, 1024); err != nil {
+		writeAPIError(w, http.StatusBadRequest, "bad_request", "invalid body")
+		return
+	}
+	if err := a.providerRepo.SetActive(r.Context(), domain.OrganizationID(sess.OrgID), domain.ID(id), req.Active); err != nil {
+		if errors.Is(err, postgres.ErrNotFound) {
+			writeAPIError(w, http.StatusNotFound, "not_found", "provider not found")
+			return
+		}
+		writeAPIError(w, http.StatusInternalServerError, "internal", "could not update provider")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]bool{"active": req.Active})
+}
+
+// handleAdminDeleteProvider remove um provider fisicamente.
+func (a *App) handleAdminDeleteProvider(w http.ResponseWriter, r *http.Request) {
+	sess := sessionFromContext(r.Context())
+	if sess == nil {
+		writeAPIError(w, http.StatusUnauthorized, "unauthenticated", "session required")
+		return
+	}
+	id, ok := providerFromPath(r)
+	if !ok {
+		writeAPIError(w, http.StatusBadRequest, "bad_request", "invalid provider id")
+		return
+	}
+	if err := a.providerRepo.Delete(r.Context(), domain.OrganizationID(sess.OrgID), domain.ID(id)); err != nil {
+		if errors.Is(err, postgres.ErrNotFound) {
+			writeAPIError(w, http.StatusNotFound, "not_found", "provider not found")
+			return
+		}
+		if errors.Is(err, postgres.ErrConflict) {
+			writeAPIError(w, http.StatusConflict, "has_dependents", "provider has models or keys")
+			return
+		}
+		writeAPIError(w, http.StatusInternalServerError, "internal", "could not delete provider")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"status": "deleted"})
+}
+
+// --- Admin: Keys CRUD extras -------------------------------------------------
+
+// updateKeyRequest payload de PATCH /api/web/admin/keys/{id}.
+type updateKeyRequest struct {
+	Label             string  `json:"label"`
+	UserAgentOverride *string `json:"user_agent_override"`
+}
+
+func keyFromPath(r *http.Request) (int64, bool) {
+	return pathID(r.URL.Path, "/api/web/admin/keys/")
+}
+
+// handleAdminGetKey retorna uma chave pelo ID.
+func (a *App) handleAdminGetKey(w http.ResponseWriter, r *http.Request) {
+	sess := sessionFromContext(r.Context())
+	if sess == nil {
+		writeAPIError(w, http.StatusUnauthorized, "unauthenticated", "session required")
+		return
+	}
+	id, ok := keyFromPath(r)
+	if !ok {
+		writeAPIError(w, http.StatusBadRequest, "bad_request", "invalid key id")
+		return
+	}
+	k, err := a.keyRepo.GetByID(r.Context(), domain.OrganizationID(sess.OrgID), domain.ID(id))
+	if err != nil {
+		if errors.Is(err, postgres.ErrNotFound) {
+			writeAPIError(w, http.StatusNotFound, "not_found", "key not found")
+			return
+		}
+		writeAPIError(w, http.StatusInternalServerError, "internal", "could not load key")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"key": keyListItem{
+			ID:                int64(k.ID),
+			ProviderID:        int64(k.ProviderID),
+			Label:             k.Label,
+			Status:            string(k.Status),
+			DisabledReason:    (*string)(k.DisabledReason),
+			DisabledUntil:     k.DisabledUntil,
+			ErrorCount:        k.ErrorCount,
+			LastUsedAt:        k.LastUsedAt,
+			UserAgentOverride: k.UserAgentOverride,
+			CreatedAt:         k.CreatedAt,
+		},
+	})
+}
+
+// handleAdminUpdateKey atualiza apenas os metadados de uma chave.
+func (a *App) handleAdminUpdateKey(w http.ResponseWriter, r *http.Request) {
+	sess := sessionFromContext(r.Context())
+	if sess == nil {
+		writeAPIError(w, http.StatusUnauthorized, "unauthenticated", "session required")
+		return
+	}
+	id, ok := keyFromPath(r)
+	if !ok {
+		writeAPIError(w, http.StatusBadRequest, "bad_request", "invalid key id")
+		return
+	}
+	var req updateKeyRequest
+	if err := parseJSON(r, &req, 4*1024); err != nil {
+		writeAPIError(w, http.StatusBadRequest, "bad_request", "invalid body")
+		return
+	}
+	label := strings.TrimSpace(req.Label)
+	if label == "" {
+		writeAPIError(w, http.StatusBadRequest, "bad_request", "label is required")
+		return
+	}
+	if len(label) > 100 {
+		label = label[:100]
+	}
+	if err := a.keyRepo.UpdateMetadata(r.Context(), domain.OrganizationID(sess.OrgID), domain.ID(id), label, req.UserAgentOverride); err != nil {
+		if errors.Is(err, postgres.ErrNotFound) {
+			writeAPIError(w, http.StatusNotFound, "not_found", "key not found")
+			return
+		}
+		writeAPIError(w, http.StatusInternalServerError, "internal", "could not update key")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"id": id, "label": label})
+}
+
+// handleAdminDeleteKey remove uma chave fisicamente.
+func (a *App) handleAdminDeleteKey(w http.ResponseWriter, r *http.Request) {
+	sess := sessionFromContext(r.Context())
+	if sess == nil {
+		writeAPIError(w, http.StatusUnauthorized, "unauthenticated", "session required")
+		return
+	}
+	id, ok := keyFromPath(r)
+	if !ok {
+		writeAPIError(w, http.StatusBadRequest, "bad_request", "invalid key id")
+		return
+	}
+	if err := a.keyRepo.Delete(r.Context(), domain.OrganizationID(sess.OrgID), domain.ID(id)); err != nil {
+		if errors.Is(err, postgres.ErrNotFound) {
+			writeAPIError(w, http.StatusNotFound, "not_found", "key not found")
+			return
+		}
+		writeAPIError(w, http.StatusInternalServerError, "internal", "could not delete key")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"status": "deleted"})
+}
+
 // pathKeyID extrai o {id} de paths /api/web/admin/keys/{id}/{action}.
 // Retorna 0 se inválido.
 func pathKeyID(p string) int64 {

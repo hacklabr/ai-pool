@@ -146,7 +146,8 @@ func (a *App) handleAdminCreateUser(w http.ResponseWriter, r *http.Request) {
 	}
 	id, err := a.userRepo.Create(r.Context(), user)
 	if err != nil {
-		// Detecção simples de UNIQUE violation (erro do pgx com code 23505).
+		// Detecção de UNIQUE violation (username duplicado) fica a cargo do
+		// caller via errors.As para *pgconn.PgError com code 23505.
 		// Não expomos detalhes técnicos; admin vê 409 com mensagem útil.
 		if isUniqueViolation(err) {
 			writeAPIError(w, http.StatusConflict, "username_taken", "username already exists")
@@ -162,6 +163,143 @@ func (a *App) handleAdminCreateUser(w http.ResponseWriter, r *http.Request) {
 		"role":     string(role),
 		"status":   string(domain.UserStatusActive),
 	})
+}
+
+// updateUserRequest payload de PATCH /api/web/admin/users/{id}.
+type updateUserRequest struct {
+	Username string `json:"username"`
+	Role     string `json:"role"`
+	Status   string `json:"status"`
+}
+
+func userFromPath(r *http.Request) (int64, bool) {
+	return pathID(r.URL.Path, "/api/web/admin/users/")
+}
+
+// handleAdminGetUser retorna um usuário pelo ID.
+func (a *App) handleAdminGetUser(w http.ResponseWriter, r *http.Request) {
+	sess := sessionFromContext(r.Context())
+	if sess == nil {
+		writeAPIError(w, http.StatusUnauthorized, "unauthenticated", "session required")
+		return
+	}
+	id, ok := userFromPath(r)
+	if !ok {
+		writeAPIError(w, http.StatusBadRequest, "bad_request", "invalid user id")
+		return
+	}
+	u, err := a.userRepo.GetByID(r.Context(), domain.OrganizationID(sess.OrgID), domain.ID(id))
+	if err != nil {
+		if errors.Is(err, postgres.ErrNotFound) {
+			writeAPIError(w, http.StatusNotFound, "not_found", "user not found")
+			return
+		}
+		writeAPIError(w, http.StatusInternalServerError, "internal", "could not load user")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"user": userAdminListItem{
+			ID:         int64(u.ID),
+			Username:   u.Username,
+			Role:       string(u.Role),
+			Status:     string(u.Status),
+			OrgID:      int64(u.OrgID),
+			CreatedAt:  u.CreatedAt,
+			UpdatedAt:  u.UpdatedAt,
+			DisabledAt: u.DisabledAt,
+		},
+	})
+}
+
+// handleAdminUpdateUser atualiza username, role e status de um usuário.
+func (a *App) handleAdminUpdateUser(w http.ResponseWriter, r *http.Request) {
+	sess := sessionFromContext(r.Context())
+	if sess == nil {
+		writeAPIError(w, http.StatusUnauthorized, "unauthenticated", "session required")
+		return
+	}
+	id, ok := userFromPath(r)
+	if !ok {
+		writeAPIError(w, http.StatusBadRequest, "bad_request", "invalid user id")
+		return
+	}
+	var req updateUserRequest
+	if err := parseJSON(r, &req, 4*1024); err != nil {
+		writeAPIError(w, http.StatusBadRequest, "bad_request", "invalid JSON body")
+		return
+	}
+	username := strings.TrimSpace(req.Username)
+	if len(username) < 3 || len(username) > 50 || !isSafeUsername(username) {
+		writeAPIError(w, http.StatusBadRequest, "invalid_username", "username must be 3-50 chars, alphanumeric/underscore/hyphen")
+		return
+	}
+	role := domain.Role(req.Role)
+	if role != domain.RoleAdmin && role != domain.RoleUser {
+		writeAPIError(w, http.StatusBadRequest, "invalid_role", "role must be admin or user")
+		return
+	}
+	status := domain.UserStatus(req.Status)
+	if status != domain.UserStatusActive && status != domain.UserStatusDisabled {
+		writeAPIError(w, http.StatusBadRequest, "invalid_status", "status must be active or disabled")
+		return
+	}
+	var disabledAt *time.Time
+	if status == domain.UserStatusDisabled {
+		now := time.Now()
+		disabledAt = &now
+	}
+	u := &domain.User{
+		ID:         domain.ID(id),
+		OrgID:      domain.OrganizationID(sess.OrgID),
+		Username:   username,
+		Role:       role,
+		Status:     status,
+		DisabledAt: disabledAt,
+	}
+	if err := a.userRepo.Update(r.Context(), domain.OrganizationID(sess.OrgID), u); err != nil {
+		if errors.Is(err, postgres.ErrNotFound) {
+			writeAPIError(w, http.StatusNotFound, "not_found", "user not found")
+			return
+		}
+		if errors.Is(err, postgres.ErrConflict) {
+			writeAPIError(w, http.StatusConflict, "username_taken", "username already exists")
+			return
+		}
+		writeAPIError(w, http.StatusInternalServerError, "internal", "could not update user")
+		return
+	}
+	if status == domain.UserStatusDisabled {
+		_ = a.sessions.DeleteAllForUser(r.Context(), domain.ID(id))
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"id": id, "status": string(status)})
+}
+
+// handleAdminDeleteUser remove um usuário fisicamente. Tokens são deletados em
+// cascata pelo DB (FK). Admin não pode se deletar.
+func (a *App) handleAdminDeleteUser(w http.ResponseWriter, r *http.Request) {
+	sess := sessionFromContext(r.Context())
+	if sess == nil {
+		writeAPIError(w, http.StatusUnauthorized, "unauthenticated", "session required")
+		return
+	}
+	id, ok := userFromPath(r)
+	if !ok {
+		writeAPIError(w, http.StatusBadRequest, "bad_request", "invalid user id")
+		return
+	}
+	if id == sess.UserID {
+		writeAPIError(w, http.StatusConflict, "self_action_forbidden", "cannot delete yourself")
+		return
+	}
+	if err := a.userRepo.Delete(r.Context(), domain.OrganizationID(sess.OrgID), domain.ID(id)); err != nil {
+		if errors.Is(err, postgres.ErrNotFound) {
+			writeAPIError(w, http.StatusNotFound, "not_found", "user not found")
+			return
+		}
+		writeAPIError(w, http.StatusInternalServerError, "internal", "could not delete user")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"status": "deleted"})
 }
 
 // handleAdminSetUserStatus habilita/desabilita usuário.

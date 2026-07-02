@@ -72,6 +72,17 @@
                 Forçar reativação
               </button>
             {{end}}
+            <button class="c-button c-button--ghost c-button--sm"
+                    @click="$dispatch('open-modal', {id: 'modal-edit-key-{{$k.ID}}'})">
+              Editar
+            </button>
+            <button class="c-button c-button--ghost c-button--sm c-button--danger"
+                    hx-delete="/api/web/admin/keys/{{$k.ID}}"
+                    hx-headers='{"X-CSRF-Token": "{{$.CSRFToken}}"}'
+                    hx-confirm="Deletar permanentemente a chave '{{$k.Label}}'?"
+                    hx-on::after-request="if(event.detail.successful){location.reload()}else{alert('Falha ao deletar ('+event.detail.xhr.status+')')}">
+              Deletar
+            </button>
           </div>
         </div>
       {{end}}
@@ -130,4 +141,35 @@
     </form>
   </div>
 </div>
+
+{{/* Modais: editar chave */}}
+{{range $k := $c.Keys}}
+<div class="c-modal" x-show="$store.modals.open === 'modal-edit-key-{{$k.ID}}'" x-cloak
+     @keydown.escape.window="$store.modals.close()"
+     @click.self="$store.modals.close()" role="dialog" aria-modal="true" aria-labelledby="modal-edit-key-title-{{$k.ID}}">
+  <div class="c-modal__dialog">
+    <div class="c-modal__header">
+      <h2 class="c-modal__title" id="modal-edit-key-title-{{$k.ID}}">Editar chave</h2>
+      <button class="c-modal__close" aria-label="Fechar" @click="$store.modals.close()">✕</button>
+    </div>
+    <form hx-patch="/api/web/admin/keys/{{$k.ID}}"
+          hx-headers='{"X-CSRF-Token": "{{$.CSRFToken}}"}'
+          hx-on::after-request="if(event.detail.successful) location.reload()">
+      <div class="c-form-field">
+        <label for="edit-key-label-{{$k.ID}}">Rótulo</label>
+        <input id="edit-key-label-{{$k.ID}}" name="label" type="text" required maxlength="100" value="{{$k.Label}}">
+      </div>
+      <div class="c-form-field">
+        <label for="edit-key-ua-{{$k.ID}}">User-Agent Override (opcional)</label>
+        <input id="edit-key-ua-{{$k.ID}}" name="user_agent_override" type="text"
+               value="{{if $k.UserAgentOverride}}{{$k.UserAgentOverride}}{{end}}">
+      </div>
+      <div class="c-modal__footer">
+        <button type="button" class="c-button c-button--ghost" @click="$store.modals.close()">Cancelar</button>
+        <button type="submit" class="c-button">Salvar</button>
+      </div>
+    </form>
+  </div>
+</div>
+{{end}}
 </div>{{end}}

@@ -14,7 +14,7 @@
   {{if $c.Models}}
     <div class="o-grid">
       {{range $m := $c.Models}}
-        <div class="c-provider-card">
+        <div class="c-provider-card" id="model-card-{{$m.ID}}">
           <div class="c-provider-card__header">
             <h3 class="c-provider-card__name">{{$m.Name}}</h3>
             {{if $m.IsActive}}
@@ -38,6 +38,37 @@
             <span class="c-provider-card__field-value">
               {{if $m.ContextWindow}}{{$m.ContextWindow}} tokens{{else}}<span class="u-text-subtle">(não informada)</span>{{end}}
             </span>
+          </div>
+          <div class="c-provider-card__actions o-cluster">
+            <button class="c-button c-button--ghost c-button--sm"
+                    @click="$dispatch('open-modal', {id: 'modal-edit-model-{{$m.ID}}'})">
+              Editar
+            </button>
+            {{if $m.IsActive}}
+              <button class="c-button c-button--ghost c-button--sm"
+                      hx-post="/api/web/admin/models/{{$m.ID}}/toggle-active"
+                      hx-vals='{"active": false}'
+                      hx-headers='{"X-CSRF-Token": "{{$.CSRFToken}}"}'
+                      hx-confirm="Desabilitar o modelo '{{$m.Name}}'?"
+                      hx-on::after-request="if(event.detail.successful){location.reload()}else{alert('Falha ('+event.detail.xhr.status+')')}">
+                Desabilitar
+              </button>
+            {{else}}
+              <button class="c-button c-button--sm"
+                      hx-post="/api/web/admin/models/{{$m.ID}}/toggle-active"
+                      hx-vals='{"active": true}'
+                      hx-headers='{"X-CSRF-Token": "{{$.CSRFToken}}"}'
+                      hx-on::after-request="if(event.detail.successful){location.reload()}else{alert('Falha ('+event.detail.xhr.status+')')}">
+                Habilitar
+              </button>
+            {{end}}
+            <button class="c-button c-button--ghost c-button--sm c-button--danger"
+                    hx-delete="/api/web/admin/models/{{$m.ID}}"
+                    hx-headers='{"X-CSRF-Token": "{{$.CSRFToken}}"}'
+                    hx-confirm="Deletar permanentemente o modelo '{{$m.Name}}'?"
+                    hx-on::after-request="if(event.detail.successful){location.reload()}else{alert('Falha ('+event.detail.xhr.status+')')}">
+              Deletar
+            </button>
           </div>
         </div>
       {{end}}
@@ -96,4 +127,46 @@
       </div>
     </form>
   </div>
-</div>{{end}}
+</div>
+
+{{/* Modais: editar modelo */}}
+{{range $m := $c.Models}}
+<div class="c-modal" x-show="$store.modals.open === 'modal-edit-model-{{$m.ID}}'" x-cloak
+     @keydown.escape.window="$store.modals.close()"
+     @click.self="$store.modals.close()" role="dialog" aria-modal="true" aria-labelledby="modal-edit-model-title-{{$m.ID}}">
+  <div class="c-modal__dialog">
+    <div class="c-modal__header">
+      <h2 class="c-modal__title" id="modal-edit-model-title-{{$m.ID}}">Editar modelo</h2>
+      <button class="c-modal__close" aria-label="Fechar" @click="$store.modals.close()">✕</button>
+    </div>
+    <form hx-patch="/api/web/admin/models/{{$m.ID}}"
+          hx-headers='{"X-CSRF-Token": "{{$.CSRFToken}}"}'
+          hx-on::after-request="if(event.detail.successful) location.reload()">
+      <div class="c-form-field">
+        <label for="edit-model-name-{{$m.ID}}">Nome do modelo</label>
+        <input id="edit-model-name-{{$m.ID}}" name="name" type="text" required value="{{$m.Name}}">
+      </div>
+      <div class="c-form-field">
+        <label for="edit-model-display-{{$m.ID}}">Nome de exibição (opcional)</label>
+        <input id="edit-model-display-{{$m.ID}}" name="display_name" type="text"
+               value="{{if $m.DisplayName}}{{$m.DisplayName}}{{end}}">
+      </div>
+      <div class="c-form-field">
+        <label for="edit-model-ctx-{{$m.ID}}">Janela de contexto em tokens (opcional)</label>
+        <input id="edit-model-ctx-{{$m.ID}}" name="context_window" type="number" min="1"
+               value="{{if $m.ContextWindow}}{{$m.ContextWindow}}{{end}}">
+      </div>
+      <div class="c-form-field">
+        <label>
+          <input type="checkbox" name="is_active" value="true" {{if $m.IsActive}}checked{{end}}>
+          Ativo
+        </label>
+      </div>
+      <div class="c-modal__footer">
+        <button type="button" class="c-button c-button--ghost" @click="$store.modals.close()">Cancelar</button>
+        <button type="submit" class="c-button">Salvar</button>
+      </div>
+    </form>
+  </div>
+</div>
+{{end}}{{end}}

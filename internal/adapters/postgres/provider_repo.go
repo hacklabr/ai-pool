@@ -103,6 +103,99 @@ func (r *ProviderRepo) ListActive(ctx context.Context, orgID domain.Organization
 	return out, rows.Err()
 }
 
+// ListAll retorna todos os provedores da organização (ativos e inativos).
+func (r *ProviderRepo) ListAll(ctx context.Context, orgID domain.OrganizationID) ([]domain.Provider, error) {
+	const q = `
+		SELECT id, organization_id, name, slug, base_url, api_spec,
+		       default_user_agent_override, is_active, created_at, updated_at
+		FROM providers
+		WHERE organization_id = $1
+		ORDER BY name`
+	rows, err := r.pool.Query(ctx, q, int64(orgID))
+	if err != nil {
+		return nil, fmt.Errorf("ProviderRepo.ListAll: %w", err)
+	}
+	defer rows.Close()
+
+	var out []domain.Provider
+	for rows.Next() {
+		p, err := scanProvider(rows)
+		if err != nil {
+			return nil, fmt.Errorf("ProviderRepo.ListAll scan: %w", err)
+		}
+		out = append(out, *p)
+	}
+	return out, rows.Err()
+}
+
+// Update altera nome, base_url, api_spec e user-agent override de um provedor.
+func (r *ProviderRepo) Update(ctx context.Context, orgID domain.OrganizationID, p *domain.Provider) error {
+	if p == nil {
+		return errors.New("ProviderRepo.Update: nil provider")
+	}
+	const q = `
+		UPDATE providers
+		SET name = $3, slug = $4, base_url = $5, api_spec = $6,
+		    default_user_agent_override = $7, updated_at = now()
+		WHERE organization_id = $1 AND id = $2`
+	tag, err := r.pool.Exec(ctx, q,
+		int64(orgID), int64(p.ID), p.Name, p.Slug, p.BaseURL, p.APISpec,
+		ptrToText(p.UserAgentGlobal),
+	)
+	if err != nil {
+		if isUniqueViolation(err) {
+			return ErrConflict
+		}
+		return fmt.Errorf("ProviderRepo.Update: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
+// SetActive ativa ou inativa um provedor.
+func (r *ProviderRepo) SetActive(ctx context.Context, orgID domain.OrganizationID, id domain.ID, active bool) error {
+	const q = `
+		UPDATE providers
+		SET is_active = $3, updated_at = now()
+		WHERE organization_id = $1 AND id = $2`
+	tag, err := r.pool.Exec(ctx, q, int64(orgID), int64(id), active)
+	if err != nil {
+		return fmt.Errorf("ProviderRepo.SetActive: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
+// Delete remove um provedor fisicamente. Retorna ErrConflict se ainda houver
+// modelos ou chaves vinculados.
+func (r *ProviderRepo) Delete(ctx context.Context, orgID domain.OrganizationID, id domain.ID) error {
+	var dependents int
+	err := r.pool.QueryRow(ctx, `
+		SELECT COALESCE((SELECT COUNT(*) FROM models WHERE provider_id = $1), 0) +
+		       COALESCE((SELECT COUNT(*) FROM provider_keys WHERE provider_id = $1), 0)`,
+		int64(id)).Scan(&dependents)
+	if err != nil {
+		return fmt.Errorf("ProviderRepo.Delete: %w", err)
+	}
+	if dependents > 0 {
+		return ErrConflict
+	}
+
+	const q = `DELETE FROM providers WHERE organization_id = $1 AND id = $2`
+	tag, err := r.pool.Exec(ctx, q, int64(orgID), int64(id))
+	if err != nil {
+		return fmt.Errorf("ProviderRepo.Delete: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
 // scanProvider aceita pgx.Row (single) ou pgx.Rows (iterator). Ambos têm Scan().
 func scanProvider(row pgx.Row) (*domain.Provider, error) {
 	var (

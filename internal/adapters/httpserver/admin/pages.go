@@ -277,7 +277,7 @@ func (a *App) handlePageAdminProviders(w http.ResponseWriter, r *http.Request) {
 	}
 	content := providersContent{}
 
-	if provs, err := a.providerRepo.ListActive(r.Context(), domain.OrganizationID(sess.OrgID)); err == nil {
+	if provs, err := a.providerRepo.ListAll(r.Context(), domain.OrganizationID(sess.OrgID)); err == nil {
 		for _, p := range provs {
 			content.Providers = append(content.Providers, providerListItem{
 				ID:                int64(p.ID),
@@ -377,6 +377,29 @@ func (a *App) handlePageAdminKeys(w http.ResponseWriter, r *http.Request) {
 	data := a.basePageData(r, "Chaves — AI Provider Pool", "keys")
 	data.Content = content
 	if err := a.renderer.renderPage(w, "pages/keys.html", data); err != nil {
+		http.Error(w, "render error", http.StatusInternalServerError)
+	}
+}
+
+// --- Admin: Tokens ----------------------------------------------------------
+
+// handlePageAdminTokens renderiza a gestão de tokens de API (admin).
+//
+// Lista todos os tokens da org com user_id/username, status, e ações de
+// revogar/deletar. Carrega a lista via API /api/web/admin/tokens (HTMX/Alpine).
+func (a *App) handlePageAdminTokens(w http.ResponseWriter, r *http.Request) {
+	if !a.requireRenderer(w) {
+		return
+	}
+	sess := sessionFromContext(r.Context())
+	if sess == nil {
+		http.Redirect(w, r, "/web/login", http.StatusSeeOther)
+		return
+	}
+
+	data := a.basePageData(r, "Tokens — AI Provider Pool", "tokens")
+	data.Content = struct{}{}
+	if err := a.renderer.renderPage(w, "pages/tokens.html", data); err != nil {
 		http.Error(w, "render error", http.StatusInternalServerError)
 	}
 }

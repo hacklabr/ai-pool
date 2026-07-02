@@ -2,6 +2,7 @@ package postgres
 
 import (
 	"errors"
+	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -29,6 +30,15 @@ var ErrConflict = errors.New("postgres: optimistic/concurrency conflict")
 
 // isNoRows retorna true se err é "no rows in result set" (pgx v5: pgx.ErrNoRows).
 func isNoRows(err error) bool { return errors.Is(err, pgx.ErrNoRows) }
+
+// isUniqueViolation detecta erro de UNIQUE constraint do PostgreSQL (code 23505).
+// Implementação leve para não acoplar o pacote a pgconn.
+func isUniqueViolation(err error) bool {
+	if err == nil {
+		return false
+	}
+	return strings.Contains(err.Error(), "23505") || strings.Contains(err.Error(), "unique constraint")
+}
 
 // =============================================================================
 // Helpers de conversão pgtype ↔ ponteiros do domínio.

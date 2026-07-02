@@ -1,0 +1,144 @@
+{{define "pages/tokens.html"}}{{template "layouts/base.html" .}}{{end}}
+
+{{define "page-content"}}<div class="o-stack u-my-6" x-data="tokensAdmin()">
+  <div class="o-page-header">
+    <div>
+      <h1>Tokens</h1>
+      <p class="u-text-muted u-text-sm">Gestão de tokens <code>sk-aipp-...</code> de todos os usuários.</p>
+    </div>
+  </div>
+
+  <div class="c-card">
+    <div class="c-card__body o-cluster">
+      <div class="c-form-field">
+        <label for="token-filter-user">Filtrar por usuário</label>
+        <select id="token-filter-user" x-model="filterUser" @change="loadTokens()">
+          <option value="">Todos os usuários</option>
+          <template x-for="u in users" :key="u.id">
+            <option :value="u.id" x-text="u.username"></option>
+          </template>
+        </select>
+      </div>
+      <button class="c-button c-button--ghost" @click="loadTokens()">↻ Atualizar</button>
+    </div>
+  </div>
+
+  <div class="c-data-table__scroll">
+    <div class="c-data-table">
+      <table>
+        <thead>
+          <tr>
+            <th scope="col">Usuário</th>
+            <th scope="col">Token (mascarado)</th>
+            <th scope="col">Nome</th>
+            <th scope="col">Status</th>
+            <th scope="col">Criado</th>
+            <th scope="col">Último uso</th>
+            <th scope="col"><span class="u-hidden">Ações</span></th>
+          </tr>
+        </thead>
+        <tbody>
+          <template x-for="t in tokens" :key="t.id">
+            <tr>
+              <td x-text="t.username"></td>
+              <td><code class="u-break-all" x-text="t.masked_token"></code></td>
+              <td x-text="t.name || '—'"></td>
+              <td><span class="c-status-badge" :class="statusClass(t.status)" x-text="statusLabel(t.status)"></span></td>
+              <td class="u-text-sm u-text-muted" x-text="fmtDate(t.created_at)"></td>
+              <td class="u-text-sm" x-text="t.last_used_at ? fmtDate(t.last_used_at) : '—'"></td>
+              <td class="c-key-row__actions">
+                <button x-show="t.status === 'active'" class="c-button c-button--ghost c-button--sm c-button--danger"
+                        @click="revoke(t.id)">
+                  Revogar
+                </button>
+                <button class="c-button c-button--ghost c-button--sm c-button--danger"
+                        @click="deleteToken(t.id)">
+                  Deletar
+                </button>
+              </td>
+            </tr>
+          </template>
+          <tr x-show="tokens.length === 0 && !loading">
+            <td colspan="7" class="u-text-muted u-text-center">Nenhum token encontrado.</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+  <p x-show="loading" class="u-text-muted">Carregando…</p>
+</div>
+
+<script>
+function tokensAdmin() {
+  return {
+    tokens: [],
+    users: [],
+    filterUser: '',
+    loading: false,
+    csrf: '{{.CSRFToken}}',
+    async init() {
+      await this.loadUsers();
+      await this.loadTokens();
+    },
+    async loadUsers() {
+      try {
+        const r = await fetch('/api/web/admin/users');
+        const j = await r.json();
+        this.users = (j.users || []).map(u => ({id: u.id, username: u.username}));
+      } catch (e) {
+        console.error('users', e);
+      }
+    },
+    async loadTokens() {
+      this.loading = true;
+      try {
+        const url = this.filterUser ? `/api/web/admin/tokens?user_id=${this.filterUser}` : '/api/web/admin/tokens';
+        const r = await fetch(url);
+        const j = await r.json();
+        this.tokens = j.tokens || [];
+      } catch (e) {
+        alert('Erro ao carregar tokens');
+      } finally {
+        this.loading = false;
+      }
+    },
+    async revoke(id) {
+      if (!confirm('Revogar este token? Clientes que o usam perderão acesso imediatamente.')) return;
+      try {
+        const r = await fetch(`/api/web/admin/tokens/${id}/revoke`, {
+          method: 'POST',
+          headers: {'X-CSRF-Token': this.csrf}
+        });
+        if (!r.ok) throw new Error(r.status);
+        await this.loadTokens();
+      } catch (e) {
+        alert('Falha ao revogar');
+      }
+    },
+    async deleteToken(id) {
+      if (!confirm('Deletar este token permanentemente? Ação irreversível.')) return;
+      try {
+        const r = await fetch(`/api/web/admin/tokens/${id}`, {
+          method: 'DELETE',
+          headers: {'X-CSRF-Token': this.csrf}
+        });
+        if (!r.ok) throw new Error(r.status);
+        await this.loadTokens();
+      } catch (e) {
+        alert('Falha ao deletar');
+      }
+    },
+    statusClass(s) {
+      return {active: 'c-status-badge--success', revoked: 'c-status-badge--danger', expired: 'c-status-badge--neutral'}[s] || 'c-status-badge--neutral';
+    },
+    statusLabel(s) {
+      return {active: 'Ativo', revoked: 'Revogado', expired: 'Expirado'}[s] || s;
+    },
+    fmtDate(s) {
+      if (!s) return '—';
+      const d = new Date(s);
+      return d.toLocaleString('pt-BR', {day:'2-digit', month:'2-digit', year:'numeric', hour:'2-digit', minute:'2-digit'});
+    }
+  };
+}
+</script>{{end}}
