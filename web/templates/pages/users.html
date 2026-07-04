@@ -9,6 +9,9 @@
     <button class="c-button" @click="$dispatch('open-modal', {id: 'modal-new-user'})">
       + Novo usuário
     </button>
+    <button class="c-button c-button--ghost" @click="$dispatch('open-modal', {id: 'modal-invite-user'})">
+      Convidar
+    </button>
   </div>
 
   {{if $c.Users}}
@@ -176,4 +179,40 @@
   </div>
 </div>
 {{end}}
-{{end}}{{end}}
+{{end}}
+
+{{/* Modal: convidar usuário */}}
+<div class="c-modal" x-show="$store.modals.open === 'modal-invite-user'" x-cloak
+     @keydown.escape.window="$store.modals.close()"
+     @click.self="$store.modals.close()" role="dialog" aria-modal="true" aria-labelledby="modal-invite-user-title">
+  <div class="c-modal__dialog">
+    <div class="c-modal__header">
+      <h2 class="c-modal__title" id="modal-invite-user-title">Convidar usuário</h2>
+      <button class="c-modal__close" aria-label="Fechar" @click="$store.modals.close()">✕</button>
+    </div>
+    <form hx-post="/api/web/admin/invitations"
+          hx-headers='{"X-CSRF-Token": "{{.CSRFToken}}"}'
+          hx-on::after-request="if(event.detail.successful){
+            var resp=JSON.parse(event.detail.xhr.responseText);
+            document.getElementById('invite-command').value=resp.setup_command;
+            document.getElementById('invite-result').style.display='block';
+          }">
+      <div class="c-form-field">
+        <label for="invite-username">Usuário</label>
+        <input id="invite-username" name="username" type="text" required minlength="3" maxlength="50"
+               pattern="[A-Za-z0-9_-]+" autocomplete="off">
+        <p class="c-form-field__hint">3-50 caracteres. Apenas letras, dígitos, _ e -.</p>
+      </div>
+      <div class="c-form-field" id="invite-result" style="display:none">
+        <label for="invite-command">Comando para o convidado executar</label>
+        <textarea id="invite-command" class="u-font-mono" rows="3" readonly style="width:100%"></textarea>
+        <p class="c-form-field__hint">Copie e envie de forma segura. O link expira em 24h e é de uso único.</p>
+      </div>
+      <div class="c-modal__footer">
+        <button type="button" class="c-button c-button--ghost" @click="$store.modals.close()">Fechar</button>
+        <button type="submit" class="c-button">Gerar convite</button>
+      </div>
+    </form>
+  </div>
+</div>
+{{end}}

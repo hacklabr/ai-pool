@@ -76,6 +76,10 @@ app:
   rateLimitPerMin: "60"
   defaultOrgID: "1"
 
+  # URL pública do serviço (links de convite / configuração de clientes).
+  # Deve apontar para o Ingress/host externo. Ex.: "https://ai-pool.example.com".
+  publicURL: ""
+
   # Timeouts HTTP — alinhados com config.go defaults.
   httpReadHeaderTimeout: "10s"
   shutdownTimeout: "60s"

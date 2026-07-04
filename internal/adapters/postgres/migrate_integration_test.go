@@ -66,7 +66,7 @@ func TestRunMigrations_AppliesSchema(t *testing.T) {
 	wantTables := []string{
 		"organizations", "users", "api_tokens", "providers", "provider_keys",
 		"models", "rate_limits", "usage_logs", "usage_rollups", "audit_log",
-		"usage_logs_dead_letter",
+		"usage_logs_dead_letter", "invitation_tokens",
 	}
 	for _, tbl := range wantTables {
 		var exists bool

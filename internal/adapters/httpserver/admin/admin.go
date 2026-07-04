@@ -21,6 +21,7 @@ package admin
 import (
 	"io/fs"
 	"net/http"
+	"strings"
 
 	"github.com/hacklabr/ai-pool/internal/adapters/postgres"
 	"github.com/hacklabr/ai-pool/internal/domain"
@@ -51,12 +52,16 @@ type App struct {
 	pepper    []byte
 	fakeHash  string // hash fake para timing equalization no login
 	cookieCfg cookieConfig
-	devMode   bool // influencia Secure flag do cookie (dev permite http)
+	devMode   bool   // influencia Secure flag do cookie (dev permite http)
+	publicURL string // URL externa do serviço (convites / config clientes)
 	// rateLimiter (F6) — usado para rate-limit do /web/login por IP (anti brute-force).
 	rateLimiter domain.RateLimiter
 	// encryptor (F7) — cifra valores de chaves de provedores ao criar.
 	// Em DEV_MODE pode ser nil (usa plaintext direto); em prod é AESGCMCrypto.
 	encryptor domain.KeyEncryptor
+	// invitationRepo e modelRepo são usados para convites de usuários.
+	invitationRepo *postgres.InvitationRepo
+	modelRepo      *postgres.ModelRepo
 }
 
 // cookieConfig parametriza flags dos cookies de sessão/CSRF.
@@ -83,6 +88,7 @@ func NewApp(
 	sessions domain.SessionStore,
 	pepper []byte,
 	devMode bool,
+	publicURL string,
 ) *App {
 	a := &App{
 		pool:         pool,
@@ -104,7 +110,10 @@ func NewApp(
 			SameSite:    http.SameSiteLaxMode,
 			MaxAge:      int(domain.SessionTTLDefault.Seconds()),
 		},
-		devMode: devMode,
+		devMode:        devMode,
+		publicURL:      strings.TrimRight(publicURL, "/"),
+		invitationRepo: postgres.NewInvitationRepo(pool),
+		modelRepo:      postgres.NewModelRepo(pool),
 	}
 	return a
 }
@@ -181,6 +190,9 @@ func (a *App) Handler() http.Handler {
 	mux.HandleFunc("POST /web/login", a.handleLogin)
 	mux.HandleFunc("POST /web/logout", a.handleLogout)
 	mux.HandleFunc("GET /web/login", a.handleLoginPage)
+	// Convites: script de setup (GET) e aceite (POST) são públicos.
+	mux.HandleFunc("GET /invite/{token}", a.handleInviteScript)
+	mux.HandleFunc("POST /api/web/invite/{token}/accept", a.handleInviteAccept)
 	// Usamos /{$} (match EXATO em "/", sem subtree) para evitar conflito com
 	// os mounts "/web/me/", "/web/dashboard", "/web/admin/", "/api/web/me/",
 	// "/api/web/admin/" — o Go 1.22+ ServeMux panic se "GET /" (subtree)
@@ -257,6 +269,11 @@ func (a *App) Handler() http.Handler {
 	adminGrp.HandleFunc("GET /api/web/admin/tokens", a.handleAdminListTokens)
 	adminGrp.HandleFunc("POST /api/web/admin/tokens/{id}/revoke", a.handleAdminRevokeToken)
 	adminGrp.HandleFunc("DELETE /api/web/admin/tokens/{id}", a.handleAdminDeleteToken)
+	// Convites de usuários.
+	adminGrp.HandleFunc("GET /api/web/admin/invitations", a.handleAdminListInvitations)
+	adminGrp.HandleFunc("POST /api/web/admin/invitations", a.handleAdminCreateInvitation)
+	adminGrp.HandleFunc("PATCH /api/web/admin/invitations/{id}/revoke", a.handleAdminRevokeInvitation)
+	adminGrp.HandleFunc("DELETE /api/web/admin/invitations/{id}", a.handleAdminDeleteInvitation)
 	// NOVO F8: endpoints JSON para Dashboard (ECharts) e Auditoria.
 	adminGrp.HandleFunc("GET /api/web/admin/dashboard", a.handleAdminDashboardData)
 	adminGrp.HandleFunc("GET /api/web/admin/audit", a.handleAdminAuditData)

@@ -28,6 +28,9 @@ data:
   RATE_LIMIT_PER_MIN: {{ .Values.app.rateLimitPerMin | quote }}
   DEFAULT_ORG_ID: {{ .Values.app.defaultOrgID | quote }}
 
+  # URL pública do serviço (links de convite / configuração de clientes).
+  AIPP_PUBLIC_URL: {{ .Values.app.publicURL | quote }}
+
   # Graceful shutdown
   SHUTDOWN_TIMEOUT: {{ .Values.app.shutdownTimeout | quote }}
   PRESTOP_SLEEP: {{ .Values.app.preStopSleep | quote }}

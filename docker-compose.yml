@@ -99,6 +99,10 @@ services:
       RATE_LIMIT_BURST: "10"
       RATE_LIMIT_PER_MIN: "60"
       DEFAULT_ORG_ID: "1"
+
+      # URL pública usada em links de convite (fallback: Host do request).
+      AIPP_PUBLIC_URL: "${AIPP_PUBLIC_URL:-http://localhost:8088}"
+
       ENABLE_METRICS: "false"
 
     ports:

@@ -60,6 +60,12 @@ type Config struct {
 	// Em prod DEVE ser false. NÃO desativa o IP blocklist.
 	SSRFAllowInsecureHTTP bool
 
+	// PublicURL é a URL externa do serviço (ex.: https://ai-pool.exemplo.com).
+	// Usada para gerar links de convite e configuração de clientes. Se vazia,
+	// fazemos fallback para o Host do request (menos seguro — host header
+	// injection). Em produção, configurar explicitamente.
+	PublicURL string
+
 	// Observabilidade
 	LogLevel  string // debug | info | warn | error
 	LogFormat string // json | text
@@ -111,6 +117,8 @@ func Load() (*Config, error) {
 		// Em DEV_MODE=true, permitimos http:// para provedores locais por default.
 		// Override explícito via SSRF_ALLOW_HTTP=true|false.
 		SSRFAllowInsecureHTTP: getbool("SSRF_ALLOW_HTTP", true),
+
+		PublicURL: strings.TrimRight(getenv("AIPP_PUBLIC_URL", ""), "/"),
 
 		LogLevel:  strings.ToLower(getenv("LOG_LEVEL", "info")),
 		LogFormat: strings.ToLower(getenv("LOG_FORMAT", "json")),

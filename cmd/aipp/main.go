@@ -143,7 +143,7 @@ func main() {
 	)
 	if pool != nil {
 		sessionStore = store.NewSessionStore()
-		adminApp = admin.NewApp(pool, sessionStore, pepper, cfg.DevMode)
+		adminApp = admin.NewApp(pool, sessionStore, pepper, cfg.DevMode, cfg.PublicURL)
 		go startSessionCleanup(sessionStore, 10*time.Minute, logger)
 	} else {
 		// Stub admin que responde 503 para tudo (precisa DB).
@@ -729,9 +729,11 @@ func composeHandler(proxyHandler, adminHandler, beegoHandler http.Handler) http.
 			proxyHandler.ServeHTTP(w, r)
 			return
 		}
-		// 3. Admin App: UI /web, /static (assets embed) e "/" raiz.
+		// 3. Admin App: UI /web, /static (assets embed), "/" raiz e convites /invite.
 		if hasPrefix(p, "/web/") || p == "/web" ||
-			hasPrefix(p, "/static/") || p == "/" {
+			hasPrefix(p, "/static/") ||
+			hasPrefix(p, "/invite/") || p == "/invite" ||
+			p == "/" {
 			adminHandler.ServeHTTP(w, r)
 			return
 		}
