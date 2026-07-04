@@ -242,8 +242,10 @@ echo "Bem-vindo ao AI Provider Pool!"
 echo ""
 
 # Solicita senha
+# < /dev/tty é necessário porque curl|bash conecta stdin ao pipe do curl,
+# não ao terminal. Sem isso, read lê do pipe (vazio) em vez do teclado.
 while true; do
-  read -rsp "Defina uma senha (mínimo 12 caracteres): " PASSWORD
+  read -rsp "Defina uma senha (mínimo 12 caracteres): " PASSWORD < /dev/tty
   echo
   if [ "${#PASSWORD}" -ge 12 ]; then
     break
@@ -251,7 +253,7 @@ while true; do
   echo "Senha muito curta. Tente novamente."
 done
 
-read -rsp "Confirme a senha: " PASSWORD2
+read -rsp "Confirme a senha: " PASSWORD2 < /dev/tty
 echo
 if [ "$PASSWORD" != "$PASSWORD2" ]; then
   echo "Senhas não conferem. Abortando."
@@ -265,7 +267,7 @@ if ! command -v jq >/dev/null 2>&1; then
 fi
 
 # Pergunta sobre OpenCode
-read -rp "Configurar OpenCode automaticamente? [s/N]: " SETUP_OPENCODE
+read -rp "Configurar OpenCode automaticamente? [s/N]: " SETUP_OPENCODE < /dev/tty
 SETUP_OPENCODE=${SETUP_OPENCODE:-N}
 if [[ "$SETUP_OPENCODE" =~ ^[Ss]$ ]]; then
   DO_OPENCODE='true'
@@ -274,7 +276,7 @@ else
 fi
 
 # Pergunta sobre MiMo-Code
-read -rp "Configurar MiMo-Code automaticamente? [s/N]: " SETUP_MIMOCODE
+read -rp "Configurar MiMo-Code automaticamente? [s/N]: " SETUP_MIMOCODE < /dev/tty
 SETUP_MIMOCODE=${SETUP_MIMOCODE:-N}
 if [[ "$SETUP_MIMOCODE" =~ ^[Ss]$ ]]; then
   DO_MIMOCODE='true'
