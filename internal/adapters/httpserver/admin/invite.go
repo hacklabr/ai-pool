@@ -140,6 +140,7 @@ func (a *App) handleInviteAccept(w http.ResponseWriter, r *http.Request) {
 			"username":       result.Username,
 			"token_prefix":   result.TokenPrefix,
 			"setup_opencode": req.SetupOpencode,
+			"setup_mimocode": req.SetupMimocode,
 		},
 		IP:        net.ParseIP(ip),
 		UserAgent: r.UserAgent(),
@@ -257,27 +258,36 @@ if [ "$PASSWORD" != "$PASSWORD2" ]; then
   exit 1
 fi
 
+# Verifica dependências
+if ! command -v jq >/dev/null 2>&1; then
+  echo "Erro: jq é necessário para este script. Instale jq e tente novamente."
+  exit 1
+fi
+
 # Pergunta sobre OpenCode
 read -rp "Configurar OpenCode automaticamente? [s/N]: " SETUP_OPENCODE
 SETUP_OPENCODE=${SETUP_OPENCODE:-N}
 if [[ "$SETUP_OPENCODE" =~ ^[Ss]$ ]]; then
-  SETUP_JSON='true'
+  DO_OPENCODE='true'
 else
-  SETUP_JSON='false'
+  DO_OPENCODE='false'
+fi
+
+# Pergunta sobre MiMo-Code
+read -rp "Configurar MiMo-Code automaticamente? [s/N]: " SETUP_MIMOCODE
+SETUP_MIMOCODE=${SETUP_MIMOCODE:-N}
+if [[ "$SETUP_MIMOCODE" =~ ^[Ss]$ ]]; then
+  DO_MIMOCODE='true'
+else
+  DO_MIMOCODE='false'
 fi
 
 echo ""
 echo "Criando usuário e token de API..."
 
-if ! command -v jq >/dev/null 2>&1; then
-  echo "Erro: jq é necessário para configurar o OpenCode. Instale jq e tente novamente."
-  echo "Para continuar sem configurar o OpenCode, responda 'N' na próxima pergunta."
-  exit 1
-fi
-
 RESPONSE=$(curl -fsSL -X POST "$ACCEPT_URL" \
   -H "Content-Type: application/json" \
-  -d "{\"password\":$(printf '%s' "$PASSWORD" | jq -Rs .),\"setup_opencode\":$SETUP_JSON}")
+  -d "{\"password\":$(printf '%s' "$PASSWORD" | jq -Rs .),\"setup_opencode\":$DO_OPENCODE,\"setup_mimocode\":$DO_MIMOCODE}")
 
 API_TOKEN=$(echo "$RESPONSE" | jq -r '.api_token')
 USERNAME=$(echo "$RESPONSE" | jq -r '.user.username')
@@ -290,40 +300,54 @@ fi
 
 echo "Usuário '$USERNAME' criado com sucesso."
 
-if [ "$SETUP_JSON" = 'true' ]; then
-  CONFIG_DIR="${HOME}/.config/opencode"
-  CONFIG_FILE="$CONFIG_DIR/opencode.json"
-  mkdir -p "$CONFIG_DIR"
+# -----------------------------------------------------------------------------
+# Função: configura o provider 'llm-pool' em um arquivo de config JSON.
+# Cria o arquivo se não existir; sobrescreve o provider se já existir.
+# -----------------------------------------------------------------------------
+configure_provider() {
+  local config_file="$1"
+  local config_dir
+  config_dir=$(dirname "$config_file")
+  mkdir -p "$config_dir"
 
-  MODELS=$(echo "$RESPONSE" | jq '.models // {}')
+  local models
+  models=$(echo "$RESPONSE" | jq '.models // {}')
 
-  if [ -f "$CONFIG_FILE" ]; then
-    echo "Atualizando configuração do OpenCode em $CONFIG_FILE"
+  if [ -f "$config_file" ]; then
+    echo "Atualizando $config_file"
     jq --arg provider_name "llm-pool" \
        --arg base_url "$POOL_URL" \
        --arg api_key "$API_TOKEN" \
-       --argjson models "$MODELS" \
+       --argjson models "$models" \
        '.provider[$provider_name] = {
           "npm": "@ai-sdk/openai-compatible",
           "name": $provider_name,
           "options": { "baseURL": $base_url, "apiKey": $api_key },
           "models": $models
-        }' "$CONFIG_FILE" > "$CONFIG_FILE.tmp" && mv "$CONFIG_FILE.tmp" "$CONFIG_FILE"
+        }' "$config_file" > "$config_file.tmp" && mv "$config_file.tmp" "$config_file"
   else
-    echo "Criando configuração do OpenCode em $CONFIG_FILE"
+    echo "Criando $config_file"
     jq -n --arg provider_name "llm-pool" \
           --arg base_url "$POOL_URL" \
           --arg api_key "$API_TOKEN" \
-          --argjson models "$MODELS" \
+          --argjson models "$models" \
           '{provider: {($provider_name): {
              "npm": "@ai-sdk/openai-compatible",
              "name": $provider_name,
              "options": { "baseURL": $base_url, "apiKey": $api_key },
              "models": $models
-           }}}' > "$CONFIG_FILE"
+           }}}' > "$config_file"
   fi
+}
 
+if [ "$DO_OPENCODE" = 'true' ]; then
+  configure_provider "${HOME}/.config/opencode/opencode.json"
   echo "OpenCode configurado com o provider 'llm-pool'."
+fi
+
+if [ "$DO_MIMOCODE" = 'true' ]; then
+  configure_provider "${HOME}/.config/mimocode/mimocode.json"
+  echo "MiMo-Code configurado com o provider 'llm-pool'."
 fi
 
 echo ""

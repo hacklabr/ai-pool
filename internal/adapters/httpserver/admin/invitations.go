@@ -262,6 +262,7 @@ func ptrInt64(v int64) *int64 {
 type acceptInvitationRequest struct {
 	Password      string `json:"password"`
 	SetupOpencode bool   `json:"setup_opencode"`
+	SetupMimocode bool   `json:"setup_mimocode"`
 }
 
 // acceptInvitationResponse resposta de sucesso do aceite de convite.
