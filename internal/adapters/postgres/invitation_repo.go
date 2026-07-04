@@ -164,7 +164,7 @@ func (r *InvitationRepo) ListByOrg(ctx context.Context, orgID domain.Organizatio
 	for rows.Next() {
 		var it InvitationListItem
 		var usedAtT pgtype.Timestamptz
-		var usedBy, createdBy int64
+		var usedBy, createdBy *int64
 		var status, role string
 		err := rows.Scan(
 			&it.ID, &it.OrgID, &it.TokenPrefix, &it.Username, &role, &status,
@@ -175,8 +175,12 @@ func (r *InvitationRepo) ListByOrg(ctx context.Context, orgID domain.Organizatio
 		}
 		it.Role = domain.Role(role)
 		it.Status = domain.InvitationTokenStatus(status)
-		it.CreatedBy = domain.ID(createdBy)
-		it.UsedBy = domain.ID(usedBy)
+		if createdBy != nil {
+			it.CreatedBy = domain.ID(*createdBy)
+		}
+		if usedBy != nil {
+			it.UsedBy = domain.ID(*usedBy)
+		}
 		it.UsedAt = timestamptzToPtr(usedAtT)
 		items = append(items, it)
 	}
@@ -187,12 +191,13 @@ func (r *InvitationRepo) ListByOrg(ctx context.Context, orgID domain.Organizatio
 }
 
 // scanInvitationToken mapeia coluna→domain.InvitationToken.
+// created_by e used_by são nullable (BIGINT REFERENCES) — usamos *int64.
 func scanInvitationToken(row pgx.Row) (*domain.InvitationToken, error) {
 	var (
 		t         domain.InvitationToken
 		orgID     int64
-		createdBy int64
-		usedBy    int64
+		createdBy *int64
+		usedBy    *int64
 		usedAtT   pgtype.Timestamptz
 		status    string
 		role      string
@@ -207,8 +212,12 @@ func scanInvitationToken(row pgx.Row) (*domain.InvitationToken, error) {
 	t.OrgID = domain.OrganizationID(orgID)
 	t.Role = domain.Role(role)
 	t.Status = domain.InvitationTokenStatus(status)
-	t.CreatedBy = domain.ID(createdBy)
-	t.UsedBy = domain.ID(usedBy)
+	if createdBy != nil {
+		t.CreatedBy = domain.ID(*createdBy)
+	}
+	if usedBy != nil {
+		t.UsedBy = domain.ID(*usedBy)
+	}
 	t.UsedAt = timestamptzToPtr(usedAtT)
 	return &t, nil
 }
@@ -249,8 +258,8 @@ func (r *InvitationRepo) Accept(ctx context.Context, tokenHash string, password 
 	var (
 		inv       domain.InvitationToken
 		orgID     int64
-		createdBy int64
-		usedBy    int64
+		createdBy *int64
+		usedBy    *int64
 		usedAtT   pgtype.Timestamptz
 		status    string
 		role      string
@@ -268,8 +277,12 @@ func (r *InvitationRepo) Accept(ctx context.Context, tokenHash string, password 
 	inv.OrgID = domain.OrganizationID(orgID)
 	inv.Role = domain.Role(role)
 	inv.Status = domain.InvitationTokenStatus(status)
-	inv.CreatedBy = domain.ID(createdBy)
-	inv.UsedBy = domain.ID(usedBy)
+	if createdBy != nil {
+		inv.CreatedBy = domain.ID(*createdBy)
+	}
+	if usedBy != nil {
+		inv.UsedBy = domain.ID(*usedBy)
+	}
 	inv.UsedAt = timestamptzToPtr(usedAtT)
 
 	if !inv.CanBeUsed(now) {

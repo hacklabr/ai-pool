@@ -46,3 +46,7 @@ coverage.html
 
 # Mesa workflow (já no repo, mas se preferir ignorar descomente)
 # .mesa/
+
+# Mesa SQLite WAL files
+.mesa/state.db-shm
+.mesa/state.db-wal
