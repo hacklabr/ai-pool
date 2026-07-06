@@ -182,37 +182,70 @@
 {{end}}
 
 {{/* Modal: convidar usuário */}}
-<div class="c-modal" x-show="$store.modals.open === 'modal-invite-user'" x-cloak
+<div class="c-modal" x-data="{ username: '', setupCommand: '', loading: false, generated: false }"
+     x-show="$store.modals.open === 'modal-invite-user'" x-cloak
      @keydown.escape.window="$store.modals.close()"
      @click.self="$store.modals.close()" role="dialog" aria-modal="true" aria-labelledby="modal-invite-user-title">
   <div class="c-modal__dialog">
     <div class="c-modal__header">
       <h2 class="c-modal__title" id="modal-invite-user-title">Convidar usuário</h2>
-      <button class="c-modal__close" aria-label="Fechar" @click="$store.modals.close()">✕</button>
+      <button class="c-modal__close" aria-label="Fechar"
+              @click="$store.modals.close(); generated = false; username = ''; setupCommand = ''">✕</button>
     </div>
-    <form hx-post="/api/web/admin/invitations"
-          hx-headers='{"X-CSRF-Token": "{{.CSRFToken}}"}'
-          hx-on::after-request="if(event.detail.successful){
-            var resp=JSON.parse(event.detail.xhr.responseText);
-            document.getElementById('invite-command').value=resp.setup_command;
-            document.getElementById('invite-result').style.display='block';
-          }">
+
+    {{/* Estado 1: form de criação */}}
+    <form x-show="!generated"
+          @submit.prevent="loading = true;
+            fetch('/api/web/admin/invitations', {
+              method: 'POST',
+              headers: {'Content-Type': 'application/json', 'X-CSRF-Token': '{{.CSRFToken}}'},
+              body: JSON.stringify({username})
+            }).then(r => r.json()).then(j => {
+              if (j.setup_command) { setupCommand = j.setup_command; loading = false; generated = true; }
+              else { throw new Error(j.error?.message || 'falha ao criar convite'); }
+            }).catch(e => { alert(e.message); loading = false; })">
       <div class="c-form-field">
         <label for="invite-username">Usuário</label>
-        <input id="invite-username" name="username" type="text" required minlength="3" maxlength="50"
+        <input id="invite-username" type="text" x-model="username" required minlength="3" maxlength="50"
                pattern="[A-Za-z0-9_-]+" autocomplete="off">
         <p class="c-form-field__hint">3-50 caracteres. Apenas letras, dígitos, _ e -.</p>
       </div>
-      <div class="c-form-field" id="invite-result" style="display:none">
-        <label for="invite-command">Comando para o convidado executar</label>
-        <textarea id="invite-command" class="u-font-mono" rows="3" readonly style="width:100%"></textarea>
-        <p class="c-form-field__hint">Copie e envie de forma segura. O link expira em 24h e é de uso único.</p>
-      </div>
       <div class="c-modal__footer">
-        <button type="button" class="c-button c-button--ghost" @click="$store.modals.close()">Fechar</button>
-        <button type="submit" class="c-button">Gerar convite</button>
+        <button type="button" class="c-button c-button--ghost" @click="$store.modals.close()">Cancelar</button>
+        <button type="submit" class="c-button" :disabled="loading">
+          <span x-show="!loading">Gerar convite</span>
+          <span x-show="loading" x-cloak>Gerando…</span>
+        </button>
       </div>
     </form>
+
+    {{/* Estado 2: convite gerado — exibe comando UMA ÚNICA VEZ */}}
+    <div x-show="generated" x-cloak>
+      <div class="c-toast c-toast--warning u-mb-4" role="alert">
+        <div>
+          <div class="c-toast__title">⚠ Copie AGORA</div>
+          <div class="c-toast__message">O link expira em 24h e é de uso único. Não será exibido novamente.</div>
+        </div>
+      </div>
+      <div class="c-form-field">
+        <label>Usuário convidado</label>
+        <div class="c-token-display c-token-display--full" x-text="username"></div>
+      </div>
+      <div class="c-form-field">
+        <label>Comando para o convidado executar</label>
+        <div class="c-token-display c-token-display--full u-break-all u-font-mono" x-text="setupCommand"></div>
+      </div>
+      <div class="c-modal__footer">
+        <button type="button" class="c-button"
+                @click="navigator.clipboard.writeText(setupCommand); $dispatch('show-toast', {type:'success', title:'Copiado', message:'Comando copiado para a área de transferência'})">
+          Copiar comando
+        </button>
+        <button type="button" class="c-button c-button--ghost"
+                @click="$store.modals.close(); generated = false; username = ''; setupCommand = ''">
+          Concluir
+        </button>
+      </div>
+    </div>
   </div>
 </div>
 {{end}}
