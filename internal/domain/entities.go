@@ -190,8 +190,19 @@ type Model struct {
 	OrgID         OrganizationID
 	Name          string // nome real no provedor, ex.: "deepseek-chat"
 	DisplayName   *string
-	ContextWindow *int // tokens
+	ContextWindow *int     // tokens
+	Modalities    []string // ex.: ["text","image"] — vazio = texto apenas
 	IsActive      bool
 	CreatedAt     time.Time
 	UpdatedAt     time.Time
+}
+
+// IsMultimodal retorna true se o modelo aceita imagem como entrada.
+func (m *Model) IsMultimodal() bool {
+	for _, mod := range m.Modalities {
+		if mod == "image" {
+			return true
+		}
+	}
+	return false
 }

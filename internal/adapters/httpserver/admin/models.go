@@ -1,6 +1,7 @@
 package admin
 
 import (
+	"encoding/json"
 	"errors"
 	"net/http"
 	"strings"
@@ -9,6 +10,23 @@ import (
 	"github.com/hacklabr/ai-pool/internal/adapters/postgres"
 	"github.com/hacklabr/ai-pool/internal/domain"
 )
+
+// jsonHasImage retorna true se o JSONB modalities contém "image".
+func jsonHasImage(b []byte) bool {
+	if len(b) == 0 {
+		return false
+	}
+	var mods []string
+	if err := json.Unmarshal(b, &mods); err != nil {
+		return false
+	}
+	for _, m := range mods {
+		if m == "image" {
+			return true
+		}
+	}
+	return false
+}
 
 // =============================================================================
 // Handlers admin de gestão de MODELOS (tela ausente em F8 — adicionada agora).
@@ -36,19 +54,18 @@ type modelListItem struct {
 	Name          string    `json:"name"`
 	DisplayName   *string   `json:"display_name,omitempty"`
 	ContextWindow *int      `json:"context_window,omitempty"`
+	Multimodal    bool      `json:"multimodal"`
 	IsActive      bool      `json:"is_active"`
 	CreatedAt     time.Time `json:"created_at"`
 }
 
 // createModelRequest payload de POST /api/web/admin/models.
-//
-// ContextWindow é *int para permitir "vazio = não informado" (decodeForm pula
-// campos vazios, deixando o ponteiro nil). ProviderID é obrigatório.
 type createModelRequest struct {
 	ProviderID    int64  `json:"provider_id"`
-	Name          string `json:"name"`           // ex.: "glm-4.6"
-	DisplayName   string `json:"display_name"`   // opcional (rótulo amigável)
-	ContextWindow *int   `json:"context_window"` // opcional (tokens)
+	Name          string `json:"name"`
+	DisplayName   string `json:"display_name"`
+	ContextWindow *int   `json:"context_window"`
+	Multimodal    bool   `json:"multimodal"`
 }
 
 // listModelsQuery carrega modelos da org com dados do provider (para lista e
@@ -57,7 +74,7 @@ func (a *App) listModelsQuery(r *http.Request, orgID int64) []modelListItem {
 	out := make([]modelListItem, 0)
 	rows, err := a.pool.Query(r.Context(), `
 		SELECT m.id, m.provider_id, p.name, p.slug, m.name,
-		       m.display_name, m.context_window, m.is_active, m.created_at
+		       m.display_name, m.context_window, m.modalities, m.is_active, m.created_at
 		FROM models m
 		JOIN providers p ON p.id = m.provider_id
 		WHERE m.organization_id = $1
@@ -69,9 +86,11 @@ func (a *App) listModelsQuery(r *http.Request, orgID int64) []modelListItem {
 	for rows.Next() {
 		var m modelListItem
 		var displayName *string
+		var modalitiesJSON []byte
 		if err := rows.Scan(&m.ID, &m.ProviderID, &m.ProviderName, &m.ProviderSlug,
-			&m.Name, &displayName, &m.ContextWindow, &m.IsActive, &m.CreatedAt); err == nil {
+			&m.Name, &displayName, &m.ContextWindow, &modalitiesJSON, &m.IsActive, &m.CreatedAt); err == nil {
 			m.DisplayName = displayName
+			m.Multimodal = jsonHasImage(modalitiesJSON)
 			out = append(out, m)
 		}
 	}
@@ -136,7 +155,10 @@ func (a *App) handleAdminCreateModel(w http.ResponseWriter, r *http.Request) {
 	if req.DisplayName != "" {
 		m.DisplayName = &req.DisplayName
 	}
-	m.ContextWindow = req.ContextWindow // nil se não informado
+	m.ContextWindow = req.ContextWindow
+	if req.Multimodal {
+		m.Modalities = []string{"text", "image"}
+	}
 
 	id, err := postgres.NewModelRepo(a.pool).Create(r.Context(), m)
 	if err != nil {
@@ -160,6 +182,7 @@ type updateModelRequest struct {
 	DisplayName   string `json:"display_name"`
 	ContextWindow *int   `json:"context_window"`
 	IsActive      bool   `json:"is_active"`
+	Multimodal    bool   `json:"multimodal"`
 }
 
 func modelFromPath(r *http.Request) (int64, bool) {
@@ -203,6 +226,7 @@ func (a *App) handleAdminGetModel(w http.ResponseWriter, r *http.Request) {
 			Name:          m.Name,
 			DisplayName:   m.DisplayName,
 			ContextWindow: m.ContextWindow,
+			Multimodal:    m.IsMultimodal(),
 			IsActive:      m.IsActive,
 			CreatedAt:     m.CreatedAt,
 		},
@@ -241,6 +265,9 @@ func (a *App) handleAdminUpdateModel(w http.ResponseWriter, r *http.Request) {
 	}
 	if req.DisplayName != "" {
 		m.DisplayName = &req.DisplayName
+	}
+	if req.Multimodal {
+		m.Modalities = []string{"text", "image"}
 	}
 	if err := postgres.NewModelRepo(a.pool).Update(r.Context(), domain.OrganizationID(sess.OrgID), m); err != nil {
 		if errors.Is(err, postgres.ErrNotFound) {

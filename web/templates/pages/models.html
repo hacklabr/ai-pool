@@ -39,6 +39,14 @@
               {{if $m.ContextWindow}}{{$m.ContextWindow}} tokens{{else}}<span class="u-text-subtle">(não informada)</span>{{end}}
             </span>
           </div>
+          {{if $m.Multimodal}}
+            <div class="c-provider-card__field">
+              <span class="c-provider-card__field-label">Modalidades</span>
+              <span class="c-provider-card__field-value">
+                <span class="c-status-badge c-status-badge--success">multimodal (texto + imagem)</span>
+              </span>
+            </div>
+          {{end}}
           <div class="c-provider-card__actions o-cluster">
             <button class="c-button c-button--ghost c-button--sm"
                     @click="$dispatch('open-modal', {id: 'modal-edit-model-{{$m.ID}}'})">
@@ -121,6 +129,12 @@
         <input id="new-model-ctx" name="context_window" type="number" min="1"
                placeholder="128000">
       </div>
+      <div class="c-form-field">
+        <label>
+          <input type="checkbox" name="multimodal" value="true">
+          Multimodal (aceita imagem como entrada)
+        </label>
+      </div>
       <div class="c-modal__footer">
         <button type="button" class="c-button c-button--ghost" @click="$store.modals.close()">Cancelar</button>
         <button type="submit" class="c-button">Criar</button>
@@ -155,6 +169,12 @@
         <label for="edit-model-ctx-{{$m.ID}}">Janela de contexto em tokens (opcional)</label>
         <input id="edit-model-ctx-{{$m.ID}}" name="context_window" type="number" min="1"
                value="{{if $m.ContextWindow}}{{$m.ContextWindow}}{{end}}">
+      </div>
+      <div class="c-form-field">
+        <label>
+          <input type="checkbox" name="multimodal" value="true" {{if $m.Multimodal}}checked{{end}}>
+          Multimodal (aceita imagem como entrada)
+        </label>
       </div>
       <div class="c-form-field">
         <label>

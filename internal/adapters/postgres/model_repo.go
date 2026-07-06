@@ -2,6 +2,7 @@ package postgres
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 
 	"github.com/hacklabr/ai-pool/internal/domain"
@@ -28,13 +29,14 @@ func (r *ModelRepo) Create(ctx context.Context, m *domain.Model) (domain.ID, err
 		return 0, fmt.Errorf("ModelRepo.Create: nil model")
 	}
 	const q = `
-		INSERT INTO models (provider_id, organization_id, name, display_name, context_window, is_active)
-		VALUES ($1, $2, $3, $4, $5, COALESCE($6, true))
+		INSERT INTO models (provider_id, organization_id, name, display_name, context_window, modalities, is_active)
+		VALUES ($1, $2, $3, $4, $5, $6, COALESCE($7, true))
 		RETURNING id`
 	var id int64
 	err := r.pool.QueryRow(ctx, q,
 		int64(m.ProviderID), int64(m.OrgID), m.Name,
 		ptrToText(m.DisplayName), int4ToNullable(m.ContextWindow),
+		modalitiesToJSONB(m.Modalities),
 		m.IsActive,
 	).Scan(&id)
 	if err != nil {
@@ -144,11 +146,12 @@ func (r *ModelRepo) Update(ctx context.Context, orgID domain.OrganizationID, m *
 	}
 	const q = `
 		UPDATE models
-		SET name = $3, display_name = $4, context_window = $5, is_active = $6, updated_at = now()
+		SET name = $3, display_name = $4, context_window = $5, modalities = $6, is_active = $7, updated_at = now()
 		WHERE organization_id = $1 AND id = $2`
 	tag, err := r.pool.Exec(ctx, q,
 		int64(orgID), int64(m.ID), m.Name,
-		ptrToText(m.DisplayName), int4ToNullable(m.ContextWindow), m.IsActive,
+		ptrToText(m.DisplayName), int4ToNullable(m.ContextWindow),
+		modalitiesToJSONB(m.Modalities), m.IsActive,
 	)
 	if err != nil {
 		if isUniqueViolation(err) {
@@ -191,8 +194,16 @@ func (r *ModelRepo) Delete(ctx context.Context, orgID domain.OrganizationID, id 
 	return nil
 }
 
-// scanModel mapeia coluna→domain.Model. Campos JSONB são descartados (MVP
-// não os expõe na UI admin).
+// modalitiesToJSONB converte []string para JSONB. slice vazio → '[]'.
+func modalitiesToJSONB(mods []string) []byte {
+	if len(mods) == 0 {
+		return []byte("[]")
+	}
+	b, _ := json.Marshal(mods)
+	return b
+}
+
+// scanModel mapeia coluna→domain.Model. modalities JSONB é parseado para []string.
 func scanModel(row pgx.Row) (*domain.Model, error) {
 	var (
 		m           domain.Model
@@ -202,11 +213,11 @@ func scanModel(row pgx.Row) (*domain.Model, error) {
 		ctxWindow   pgtype.Int4
 		_aliases    []byte
 		_pricing    []byte
-		_modalities []byte
+		modalitiesB []byte
 	)
 	err := row.Scan(
 		&m.ID, &providerID, &orgID, &m.Name, &displayName, &ctxWindow,
-		&_aliases, &_pricing, &_modalities, &m.IsActive, &m.CreatedAt, &m.UpdatedAt,
+		&_aliases, &_pricing, &modalitiesB, &m.IsActive, &m.CreatedAt, &m.UpdatedAt,
 	)
 	if err != nil {
 		return nil, err
@@ -217,6 +228,9 @@ func scanModel(row pgx.Row) (*domain.Model, error) {
 	if ctxWindow.Valid {
 		cw := int(ctxWindow.Int32)
 		m.ContextWindow = &cw
+	}
+	if len(modalitiesB) > 0 && string(modalitiesB) != "[]" {
+		_ = json.Unmarshal(modalitiesB, &m.Modalities)
 	}
 	return &m, nil
 }

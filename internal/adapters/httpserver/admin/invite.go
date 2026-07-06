@@ -193,6 +193,8 @@ func writeRateLimited(w http.ResponseWriter, message string, retrySec int) {
 }
 
 // activeModels retorna os modelos ativos da organização no formato do OpenCode.
+// Modelos multimodais incluem o bloco "modalities" no formato esperado pelo
+// @ai-sdk/openai-compatible.
 func (a *App) activeModels(ctx context.Context, orgID domain.OrganizationID) (map[string]any, error) {
 	all, err := a.modelRepo.ListAll(ctx, orgID)
 	if err != nil {
@@ -208,6 +210,12 @@ func (a *App) activeModels(ctx context.Context, orgID domain.OrganizationID) (ma
 			display = *m.DisplayName
 		}
 		model := map[string]any{"name": display}
+		if m.IsMultimodal() {
+			model["modalities"] = map[string]any{
+				"input":  []string{"text", "image"},
+				"output": []string{"text"},
+			}
+		}
 		out[m.Name] = model
 	}
 	return out, nil
