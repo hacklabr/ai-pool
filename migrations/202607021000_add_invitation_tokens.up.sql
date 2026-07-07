@@ -17,8 +17,8 @@ CREATE TABLE invitation_tokens (
                         CHECK (role IN ('admin', 'user')),
     status          TEXT NOT NULL DEFAULT 'pending'
                         CHECK (status IN ('pending', 'used', 'revoked')),
-    created_by      BIGINT REFERENCES users(id),
-    used_by         BIGINT REFERENCES users(id),
+    created_by      BIGINT REFERENCES users(id) ON DELETE SET NULL,
+    used_by         BIGINT REFERENCES users(id) ON DELETE SET NULL,
     used_at         TIMESTAMPTZ,
     expires_at      TIMESTAMPTZ NOT NULL,
     created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
