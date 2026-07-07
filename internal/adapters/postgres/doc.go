@@ -15,7 +15,7 @@
 //
 //   - pgx/v5 + pgxpool (NÃO database/sql). Prepared statements via $1, $2...
 //     NUNCA concatenação de strings em SQL.
-//   - Pool: 10 conns default (calibrável via DB_MAX_CONNS). PgBouncer só no
+//   - Pool: 60 conns default (calibrável via DB_MAX_CONNS). PgBouncer só no
 //     roadmap quando réplicas crescerem.
 //   - Migrations: golang-migrate com source/iofs (embed) + database/pgx/v5.
 //     Aplicadas via Helm Job hook no deploy (DevOps §5.3).

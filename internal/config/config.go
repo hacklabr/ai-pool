@@ -89,7 +89,7 @@ type Config struct {
 func Load() (*Config, error) {
 	c := &Config{
 		HTTPAddr:          getenv("HTTP_ADDR", ":8080"),
-		ReadTimeout:       getduration("HTTP_READ_TIMEOUT", 0),
+		ReadTimeout:       getduration("HTTP_READ_TIMEOUT", 60*time.Second),
 		ReadHeaderTimeout: getduration("HTTP_READ_HEADER_TIMEOUT", 10*time.Second),
 		WriteTimeout:      getduration("HTTP_WRITE_TIMEOUT", 0),
 		IdleTimeout:       getduration("HTTP_IDLE_TIMEOUT", 120*time.Second),
@@ -107,8 +107,8 @@ func Load() (*Config, error) {
 		PreStopSleep:    getduration("PRESTOP_SLEEP", 10*time.Second),
 
 		DBDSN:             getenv("DATABASE_URL", getenv("DB_DSN", "")),
-		DBMaxConns:        clampInt32(getenvInt("DB_MAX_CONNS", 10)),
-		DBMinConns:        clampInt32(getenvInt("DB_MIN_CONNS", 2)),
+		DBMaxConns:        clampInt32(getenvInt("DB_MAX_CONNS", 60)),
+		DBMinConns:        clampInt32(getenvInt("DB_MIN_CONNS", 5)),
 		DBConnMaxLifetime: getduration("DB_CONN_MAX_LIFETIME", time.Hour),
 
 		KEKPath:           getenv("KEK_PATH", ""),

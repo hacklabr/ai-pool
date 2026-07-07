@@ -16,8 +16,8 @@ import (
 // Em shutdown, chamar Close() para liberar conexões (drenagem graceful).
 //
 // Defaults (spec §3.4.5, DevOps §5.2):
-//   - max_conns:    DB_MAX_CONNS (default 10) — folgado para 1 pod × 30 usuários.
-//   - min_conns:    DB_MIN_CONNS (default 2)  — evita cold-start de conexão.
+//   - max_conns:    DB_MAX_CONNS (default 60) — suporta múltiplos pods × usuários simultâneos.
+//   - min_conns:    DB_MIN_CONNS (default 5)  — evita cold-start de conexão.
 //   - max_lifetime: DB_CONN_MAX_LIFETIME (default 1h) — força reestabelecimento
 //     para coletar novas configurações do servidor e evitar stale conns.
 //   - health_check_period: 30s — detecta conexões mortas (failover de DB).
