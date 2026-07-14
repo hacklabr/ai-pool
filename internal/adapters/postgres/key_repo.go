@@ -419,11 +419,73 @@ func scanKey(row pgx.Row) (*domain.ProviderKey, error) {
 	return &k, nil
 }
 
-// =============================================================================
-// Stubs para fases futuras:
+// TouchLastUsedBatch atualiza last_used_at para um conjunto de chaves em UMA
+// única query (debounce 60s, spec §3.4.4).
 //
-//   - TouchLastUsedBatch(ids, now)               -> debounce LRU (especular TokenRepo).
-//   - ListByProviderForAdmin(orgID, providerID)  -> F8 admin UI (todas as chaves).
-//   - RotateEncryption(id, newCipher, newKeyID)  -> rotação de KEK (roadmap).
-//   - UpdateUserAgentOverride(id, ua)            -> F8 admin UI.
-// =============================================================================
+// Em vez de atualizar last_used_at a cada request (write amplification), o
+// flusher periódico acumula timestamps dirty do LRUStore e faz flush a cada
+// 60s via esta função.
+//
+// timestamps: mapa keyID -> lastUsedAt. Apenas chaves presentes são atualizadas.
+func (r *KeyRepo) TouchLastUsedBatch(ctx context.Context, timestamps map[domain.ID]time.Time) error {
+	if len(timestamps) == 0 {
+		return nil
+	}
+	const q = `
+		UPDATE provider_keys AS k
+		SET last_used_at = x.ts, updated_at = now()
+		FROM (SELECT id, ts FROM unnest($1::bigint[], $2::timestamptz[])) AS x(id, ts)
+		WHERE k.id = x.id`
+	ids := make([]int64, 0, len(timestamps))
+	tss := make([]time.Time, 0, len(timestamps))
+	for id, ts := range timestamps {
+		ids = append(ids, int64(id))
+		tss = append(tss, ts)
+	}
+	_, err := r.pool.Exec(ctx, q, ids, tss)
+	if err != nil {
+		return fmt.Errorf("KeyRepo.TouchLastUsedBatch: %w", err)
+	}
+	return nil
+}
+
+// KeyTimestampEntry é o resultado de ListEnabledKeyTimestamps.
+// Usado no boot para popular o LRUStore com os last_used_at reais do DB.
+type KeyTimestampEntry struct {
+	ProviderID domain.ID
+	KeyID      domain.ID
+	LastUsedAt time.Time // zero se NULL no DB (nunca usada)
+}
+
+// ListEnabledKeyTimestamps retorna (providerID, keyID, lastUsedAt) de todas as
+// chaves 'enabled' da organização. Usado no boot para popular o LRUStore com
+// os timestamps reais, permitindo reconstruir o ranking LRU após restart.
+func (r *KeyRepo) ListEnabledKeyTimestamps(ctx context.Context, orgID domain.OrganizationID) ([]KeyTimestampEntry, error) {
+	const q = `
+		SELECT provider_id, id, COALESCE(last_used_at, '1970-01-01T00:00:01Z')
+		FROM provider_keys
+		WHERE organization_id = $1 AND status = 'enabled'`
+	rows, err := r.pool.Query(ctx, q, int64(orgID))
+	if err != nil {
+		return nil, fmt.Errorf("KeyRepo.ListEnabledKeyTimestamps: %w", err)
+	}
+	defer rows.Close()
+
+	var out []KeyTimestampEntry
+	for rows.Next() {
+		var (
+			provID    int64
+			keyID     int64
+			lastUsedT pgtype.Timestamptz
+		)
+		if err := rows.Scan(&provID, &keyID, &lastUsedT); err != nil {
+			return nil, fmt.Errorf("KeyRepo.ListEnabledKeyTimestamps scan: %w", err)
+		}
+		out = append(out, KeyTimestampEntry{
+			ProviderID: domain.ID(provID),
+			KeyID:      domain.ID(keyID),
+			LastUsedAt: lastUsedT.Time,
+		})
+	}
+	return out, rows.Err()
+}

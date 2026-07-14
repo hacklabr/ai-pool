@@ -17,7 +17,7 @@ import (
 // exclude, (4) retornar ErrNoKeysAvailable quando vazio.
 func TestLRUStore_PickLeastUsed(t *testing.T) {
 	ctx := context.Background()
-	s := NewLRUStore().(*memoryLRUStore)
+	s := NewLRUStore()
 
 	const prov domain.ID = 100
 	// Popula 3 candidatas via SetCandidates (cold start).
@@ -63,7 +63,7 @@ func TestLRUStore_PickLeastUsed(t *testing.T) {
 // TestLRUStore_Exclude garante que chaves em exclude são puladas.
 func TestLRUStore_Exclude(t *testing.T) {
 	ctx := context.Background()
-	s := NewLRUStore().(*memoryLRUStore)
+	s := NewLRUStore()
 	const prov domain.ID = 200
 	s.SetCandidates(prov, []domain.ID{10, 20, 30})
 
@@ -95,7 +95,7 @@ func TestLRUStore_NoKeysAvailable(t *testing.T) {
 // TestLRUStore_DisableReenable valida o ciclo de vida da chave no store.
 func TestLRUStore_DisableReenable(t *testing.T) {
 	ctx := context.Background()
-	s := NewLRUStore().(*memoryLRUStore)
+	s := NewLRUStore()
 	const prov domain.ID = 300
 	s.SetCandidates(prov, []domain.ID{1, 2, 3})
 
@@ -138,7 +138,126 @@ func TestLRUStore_DisableReenable(t *testing.T) {
 	}
 }
 
-// ===== AffinityStore =====
+// TestLRUStore_SeedCandidates validates boot seeding with real DB timestamps.
+// After seeding, PickLeastUsed must select the key with the OLDEST timestamp first.
+func TestLRUStore_SeedCandidates(t *testing.T) {
+	ctx := context.Background()
+	s := NewLRUStore()
+
+	const prov domain.ID = 400
+	// Seed: key 1 used 1h ago, key 2 used 5min ago, key 3 never used (zero).
+	old := time.Now().Add(-1 * time.Hour)
+	recent := time.Now().Add(-5 * time.Minute)
+	s.SeedCandidates(prov, map[domain.ID]time.Time{
+		1: old,
+		2: recent,
+		3: time.Time{}, // never used
+	})
+
+	// First pick: key 3 (zero timestamp = least recently used).
+	c, err := s.PickLeastUsed(ctx, prov, nil)
+	if err != nil {
+		t.Fatalf("pick: %v", err)
+	}
+	if c.KeyID != 3 {
+		t.Fatalf("expected key 3 (zero ts), got %d", c.KeyID)
+	}
+
+	// Second pick: key 1 (oldest non-zero timestamp).
+	c2, err := s.PickLeastUsed(ctx, prov, nil)
+	if err != nil {
+		t.Fatalf("pick2: %v", err)
+	}
+	if c2.KeyID != 1 {
+		t.Fatalf("expected key 1 (oldest), got %d", c2.KeyID)
+	}
+
+	// Third pick: key 2 (the remaining one, which now has the oldest ts).
+	c3, err := s.PickLeastUsed(ctx, prov, nil)
+	if err != nil {
+		t.Fatalf("pick3: %v", err)
+	}
+	if c3.KeyID != 2 {
+		t.Fatalf("expected key 2, got %d", c3.KeyID)
+	}
+}
+
+// TestLRUStore_NewKeyPickedFirst reproduces the bug: a key added AFTER boot
+// (via EnsureCandidate) must be picked before seeded keys with non-zero ts.
+func TestLRUStore_NewKeyPickedFirst(t *testing.T) {
+	ctx := time.Now // placeholder; not used
+	_ = ctx
+	s := NewLRUStore()
+
+	const prov domain.ID = 500
+	// Boot: 2 keys already used (timestamps in the past).
+	past := time.Now().Add(-30 * time.Minute)
+	s.SeedCandidates(prov, map[domain.ID]time.Time{
+		1: past,
+		2: past.Add(5 * time.Minute),
+	})
+
+	// Simulate a new key added at runtime via EnsureCandidate (as the engine does
+	// in each request for keys not yet in the store).
+	bgCtx := context.Background()
+	if err := s.EnsureCandidate(bgCtx, 3, prov); err != nil {
+		t.Fatalf("EnsureCandidate: %v", err)
+	}
+
+	// Key 3 must be picked FIRST (zero timestamp < any real timestamp).
+	c, err := s.PickLeastUsed(bgCtx, prov, nil)
+	if err != nil {
+		t.Fatalf("pick: %v", err)
+	}
+	if c.KeyID != 3 {
+		t.Fatalf("expected new key 3 to be picked first, got %d", c.KeyID)
+	}
+}
+
+// TestLRUStore_FlushDirty validates dirty tracking.
+// After PickLeastUsed/MarkUsed, FlushDirty returns the dirty timestamps and clears.
+func TestLRUStore_FlushDirty(t *testing.T) {
+	ctx := context.Background()
+	s := NewLRUStore()
+	const prov domain.ID = 600
+	s.SetCandidates(prov, []domain.ID{1, 2})
+
+	// No dirty entries initially.
+	if d := s.FlushDirty(); d != nil {
+		t.Fatalf("expected nil dirty before any pick, got %d entries", len(d))
+	}
+
+	// PickLeastUsed marks key as dirty.
+	c, err := s.PickLeastUsed(ctx, prov, nil)
+	if err != nil {
+		t.Fatalf("pick: %v", err)
+	}
+
+	d := s.FlushDirty()
+	if d == nil || len(d) != 1 {
+		t.Fatalf("expected 1 dirty entry, got %v", d)
+	}
+	if _, ok := d[c.KeyID]; !ok {
+		t.Fatalf("dirty entry missing picked key %d", c.KeyID)
+	}
+
+	// Second flush: no dirty entries (already flushed).
+	if d2 := s.FlushDirty(); d2 != nil {
+		t.Fatalf("expected nil dirty after flush, got %d entries", len(d2))
+	}
+
+	// MarkUsed adds dirty entry.
+	if err := s.MarkUsed(ctx, 2); err != nil {
+		t.Fatalf("MarkUsed: %v", err)
+	}
+	d3 := s.FlushDirty()
+	if d3 == nil || len(d3) != 1 {
+		t.Fatalf("expected 1 dirty after MarkUsed, got %v", d3)
+	}
+	if _, ok := d3[2]; !ok {
+		t.Fatalf("dirty entry missing key 2")
+	}
+}
 
 func TestAffinityStore_RememberLookupInvalidate(t *testing.T) {
 	ctx := context.Background()

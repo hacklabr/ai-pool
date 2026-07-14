@@ -130,7 +130,7 @@ func (e *RoutingEngine) ResolveKeyWithAffinity(
 			for _, kid := range reactivated {
 				// Precisamos do providerID para OnKeyReenabled. Como não temos
 				// ele aqui, passamos 0 e o LRUStore trata por lookup interno.
-				// Na implementação memoryLRUStore, OnKeyReenabled recebe
+				// Na implementação MemoryLRUStore, OnKeyReenabled recebe
 				// providerID para inserir no map correto — vamos buscar via
 				// ListUsableByProvider logo abaixo (a chave já estará 'enabled').
 				// Para notificar corretamente o LRUStore, fazemos o Reenable

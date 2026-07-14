@@ -229,7 +229,7 @@ func main() {
 		schedCtx, schedCancel2 := context.WithCancel(context.Background())
 		go scheduler.Start(schedCtx)
 		defer schedCancel2()
-		_ = schedCancel
+		defer schedCancel() // stop flusher goroutine from buildRoutingEngine
 	}
 
 	// Inicia rollup job (background goroutine).
@@ -596,6 +596,8 @@ func newKeyResolver(pool *pgxpool.Pool, logger *slog.Logger) domain.KeyResolver 
 //   - ParserRegistry com DefaultErrorParser para datas de liberação de cota.
 //   - AutoDisableManager com threshold 5/janela 2min/backoff crescente.
 //   - ReactivationScheduler com tick 30s.
+//   - Boot seeding do LRUStore a partir de last_used_at do DB.
+//   - Flusher periódico de last_used_at (debounce 60s, spec §3.4.4).
 //
 // Retorna (engine, scheduler, schedulerCancelFn).
 func buildRoutingEngine(cfg *config.Config, logger *slog.Logger, pool *pgxpool.Pool) (
@@ -634,6 +636,10 @@ func buildRoutingEngine(cfg *config.Config, logger *slog.Logger, pool *pgxpool.P
 		engineDeps, decryptor, lruStore, affinityStore, autoDisable, logger,
 	)
 
+	// Boot seeding: popula o LRUStore com last_used_at reais do DB para
+	// reconstruir o ranking LRU após restart (spec §3.2.2).
+	seedLRUStore(context.Background(), lruStore, keyRepo, domain.OrganizationID(cfg.DefaultOrgID), logger)
+
 	// Scheduler de reativação — tick 30s.
 	schedDeps := postgres.NewSchedulerDepsAdapter(keyRepo)
 	scheduler := routing.NewReactivationScheduler(
@@ -642,9 +648,78 @@ func buildRoutingEngine(cfg *config.Config, logger *slog.Logger, pool *pgxpool.P
 		30*time.Second, logger,
 	)
 
-	schedCtx, schedCancel := context.WithCancel(context.Background())
-	_ = schedCtx
-	return engine, scheduler, schedCancel
+	// Context para jobs de background (scheduler + flusher).
+	bgCtx, bgCancel := context.WithCancel(context.Background())
+
+	// Flusher de last_used_at: persiste timestamps dirty do LRUStore a cada 60s
+	// (debounce, spec §3.4.4). Sem isto, last_used_at fica sempre NULL e o
+	// ranking LRU é perdido a cada restart.
+	go runLastUsedFlusher(bgCtx, lruStore, keyRepo, domain.OrganizationID(cfg.DefaultOrgID), logger)
+
+	return engine, scheduler, bgCancel
+}
+
+// seedLRUStore carrega last_used_at de todas as chaves enabled do DB e popula
+// o LRUStore via SeedCandidates. Best-effort: erros são logados mas não fatais
+// (o LRUStore será populado lazy via EnsureCandidate a cada request).
+func seedLRUStore(ctx context.Context, lru *store.MemoryLRUStore, keyRepo *postgres.KeyRepo, orgID domain.OrganizationID, logger *slog.Logger) {
+	entries, err := keyRepo.ListEnabledKeyTimestamps(ctx, orgID)
+	if err != nil {
+		logger.Warn("LRU boot seed: failed to load key timestamps; store will be populated lazily", "err", err)
+		return
+	}
+	if len(entries) == 0 {
+		logger.Info("LRU boot seed: no enabled keys found")
+		return
+	}
+	// Agrupa por provider para chamar SeedCandidates uma vez por provider.
+	seedsByProvider := make(map[domain.ID]map[domain.ID]time.Time)
+	for _, e := range entries {
+		m, ok := seedsByProvider[e.ProviderID]
+		if !ok {
+			m = make(map[domain.ID]time.Time)
+			seedsByProvider[e.ProviderID] = m
+		}
+		m[e.KeyID] = e.LastUsedAt
+	}
+	for provID, seeds := range seedsByProvider {
+		lru.SeedCandidates(provID, seeds)
+	}
+	logger.Info("LRU boot seed completed",
+		"providers", len(seedsByProvider),
+		"total_keys", len(entries),
+	)
+}
+
+// runLastUsedFlusher persiste timestamps dirty do LRUStore no DB a cada 60s
+// (debounce, spec §3.4.4). Termina quando ctx é cancelado (graceful shutdown).
+func runLastUsedFlusher(ctx context.Context, lru *store.MemoryLRUStore, keyRepo *postgres.KeyRepo, orgID domain.OrganizationID, logger *slog.Logger) {
+	const interval = 60 * time.Second
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			// Flush final antes de sair (graceful).
+			flushLastUsed(lru, keyRepo, logger)
+			return
+		case <-ticker.C:
+			flushLastUsed(lru, keyRepo, logger)
+		}
+	}
+}
+
+// flushLastUsed lê o dirty set do LRUStore e persiste no DB.
+func flushLastUsed(lru *store.MemoryLRUStore, keyRepo *postgres.KeyRepo, logger *slog.Logger) {
+	dirty := lru.FlushDirty()
+	if len(dirty) == 0 {
+		return
+	}
+	if err := keyRepo.TouchLastUsedBatch(context.Background(), dirty); err != nil {
+		logger.Warn("last_used_at flush failed; timestamps will be retried next tick", "err", err, "keys", len(dirty))
+		return
+	}
+	logger.Debug("last_used_at flushed", "keys", len(dirty))
 }
 
 // buildDecryptor monta o KeyDecryptor conforme o modo:

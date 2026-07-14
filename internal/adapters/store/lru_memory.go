@@ -8,40 +8,66 @@ import (
 	"github.com/hacklabr/ai-pool/internal/domain"
 )
 
-// memoryLRUStore implementa domain.LRUStore com map protegido por mutex.
+// MemoryLRUStore implementa domain.LRUStore com map protegido por mutex.
 //
 // Estrutura por provider: map[keyID]lastUsed (atomic).
-// Seleção: itera o map (n≤5 chaves por provider é trivial — O(n) é O(1) prático).
+// Seleção: itera o map (n<=5 chaves por provider é trivial — O(n) é O(1) prático).
 // Min-heap seria over-engineering (spec §4.4 do Backend Architect Turno 1).
 //
 // As candidatas (KeyCandidate) são fornecidas pelo repositório de chaves
-// (PostgreSQL) via SetCandidates na inicialização e em OnKeyReenabled.
+// (PostgreSQL) via SeedCandidates na inicialização e em OnKeyReenabled.
 // O store mantém APENAS os IDs e timestamps; o segredo descriptografado é
 // injetado pelo repositório no momento da seleção.
-type memoryLRUStore struct {
+//
+// Dirty tracking: toda chave cujo last_used_at muda (PickLeastUsed ou MarkUsed)
+// é registrada em `dirty`. O flusher periódico chama FlushDirty() para persistir
+// os timestamps no DB (debounce 60s, spec §3.4.4).
+type MemoryLRUStore struct {
 	mu sync.Mutex
 	// candidates por provider: providerID -> map[keyID]lastUsed
 	byProvider map[domain.ID]map[domain.ID]time.Time
 	// providerByKey: keyID -> providerID (para OnKeyDisabled saber a qual provider pertence)
 	providerByKey map[domain.ID]domain.ID
+	// dirty: keyID -> lastUsedAt (apenas chaves alteradas desde o último FlushDirty).
+	// O flusher periódico lê e zera este map para persistir no DB.
+	dirty map[domain.ID]time.Time
 }
 
 // NewLRUStore cria um LRUStore in-memory vazio.
-// As candidatas devem ser populadas via SetCandidates durante o boot
+// As candidatas devem ser populadas via SeedCandidates durante o boot
 // (após carregar chaves ativas do DB) e via OnKeyReenabled quando reativadas.
-func NewLRUStore() domain.LRUStore {
-	return &memoryLRUStore{
+func NewLRUStore() *MemoryLRUStore {
+	return &MemoryLRUStore{
 		byProvider:    make(map[domain.ID]map[domain.ID]time.Time),
 		providerByKey: make(map[domain.ID]domain.ID),
+		dirty:         make(map[domain.ID]time.Time),
 	}
 }
 
-// SetCandidates popula as candidatas iniciais por provider.
-// Deve ser chamado uma vez no boot (após carregar chaves ativas do DB) e pode
-// ser chamado novamente para sincronizar (em implementation futura).
-// Não é parte da interface domain.LRUStore (é um método de bootstrap específico
-// desta implementação).
-func (s *memoryLRUStore) SetCandidates(providerID domain.ID, keyIDs []domain.ID) {
+// SeedCandidates popula as candidatas iniciais por provider a partir dos
+// timestamps do DB (boot). Deve ser chamado uma vez no boot após carregar
+// chaves ativas do DB. Chaves com last_used_at NULL (nunca usadas) entram
+// com time.Time{} (zero) — são candidatas a serem pickadas primeiro.
+//
+// Diferente de SetCandidates (que só aceita IDs), SeedCandidates aceita os
+// timestamps reais do DB, permitindo reconstruir o ranking LRU após restart.
+func (s *MemoryLRUStore) SeedCandidates(providerID domain.ID, seeds map[domain.ID]time.Time) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	m, ok := s.byProvider[providerID]
+	if !ok {
+		m = make(map[domain.ID]time.Time, len(seeds))
+		s.byProvider[providerID] = m
+	}
+	for id, ts := range seeds {
+		m[id] = ts
+		s.providerByKey[id] = providerID
+	}
+}
+
+// SetCandidates popula as candidatas iniciais por provider (compat testes).
+// Chaves novas entram como "menos usadas" (lastUsed zero → NULLS FIRST).
+func (s *MemoryLRUStore) SetCandidates(providerID domain.ID, keyIDs []domain.ID) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	m, ok := s.byProvider[providerID]
@@ -51,8 +77,6 @@ func (s *memoryLRUStore) SetCandidates(providerID domain.ID, keyIDs []domain.ID)
 	}
 	for _, id := range keyIDs {
 		if _, exists := m[id]; !exists {
-			// Chaves novas entram como "menos usadas" (lastUsed zero → NULLS FIRST).
-			// Distribui cold-start naturalmente.
 			m[id] = time.Time{}
 		}
 		s.providerByKey[id] = providerID
@@ -68,7 +92,7 @@ func (s *memoryLRUStore) SetCandidates(providerID domain.ID, keyIDs []domain.ID)
 // Não popula DecryptedValue/UserAgent — quem chama (orquestrador de failover)
 // busca via repositório de chaves usando o KeyID retornado. Mantemos o store
 // livre de segredos.
-func (s *memoryLRUStore) PickLeastUsed(_ context.Context, providerID domain.ID, exclude []domain.ID) (*domain.KeyCandidate, error) {
+func (s *MemoryLRUStore) PickLeastUsed(_ context.Context, providerID domain.ID, exclude []domain.ID) (*domain.KeyCandidate, error) {
 	excluded := make(map[domain.ID]struct{}, len(exclude))
 	for _, id := range exclude {
 		excluded[id] = struct{}{}
@@ -103,12 +127,13 @@ func (s *memoryLRUStore) PickLeastUsed(_ context.Context, providerID domain.ID, 
 
 	// Atualiza no momento da seleção (semântica definida no spec).
 	m[bestID] = now
+	s.dirty[bestID] = now
 
 	return &domain.KeyCandidate{KeyID: bestID, ProviderID: providerID}, nil
 }
 
 // MarkUsed atualiza last_used_at sem selecionar (usado após afinidade ou sucesso).
-func (s *memoryLRUStore) MarkUsed(_ context.Context, keyID domain.ID) error {
+func (s *MemoryLRUStore) MarkUsed(_ context.Context, keyID domain.ID) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	providerID, ok := s.providerByKey[keyID]
@@ -117,7 +142,9 @@ func (s *memoryLRUStore) MarkUsed(_ context.Context, keyID domain.ID) error {
 	}
 	if m, ok := s.byProvider[providerID]; ok {
 		if _, exists := m[keyID]; exists {
-			m[keyID] = time.Now()
+			now := time.Now()
+			m[keyID] = now
+			s.dirty[keyID] = now
 		}
 	}
 	return nil
@@ -125,7 +152,7 @@ func (s *memoryLRUStore) MarkUsed(_ context.Context, keyID domain.ID) error {
 
 // OnKeyDisabled remove a chave do pool de candidatas (auto-disable).
 // Permanece em providerByKey para que OnKeyReenabled saiba o provider.
-func (s *memoryLRUStore) OnKeyDisabled(_ context.Context, keyID domain.ID) error {
+func (s *MemoryLRUStore) OnKeyDisabled(_ context.Context, keyID domain.ID) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	providerID, ok := s.providerByKey[keyID]
@@ -140,7 +167,7 @@ func (s *memoryLRUStore) OnKeyDisabled(_ context.Context, keyID domain.ID) error
 
 // OnKeyReenabled reinsere a chave no pool com last_used_at=agora (vai para o
 // "fim" da fila LRU — é candidata a ser usada).
-func (s *memoryLRUStore) OnKeyReenabled(_ context.Context, keyID domain.ID, providerID domain.ID) error {
+func (s *MemoryLRUStore) OnKeyReenabled(_ context.Context, keyID domain.ID, providerID domain.ID) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.providerByKey[keyID] = providerID
@@ -149,7 +176,9 @@ func (s *memoryLRUStore) OnKeyReenabled(_ context.Context, keyID domain.ID, prov
 		m = make(map[domain.ID]time.Time)
 		s.byProvider[providerID] = m
 	}
-	m[keyID] = time.Now()
+	now := time.Now()
+	m[keyID] = now
+	s.dirty[keyID] = now
 	return nil
 }
 
@@ -157,7 +186,7 @@ func (s *memoryLRUStore) OnKeyReenabled(_ context.Context, keyID domain.ID, prov
 // (candidata "fria" a ser pickada primeiro). NÃO toca em chaves já presentes —
 // preserva o ranking LRU. Usa-se em cada request para incluir chaves cadastradas
 // após o boot sem corromper o LRU (bug anterior: OnKeyReenabled resetava tudo).
-func (s *memoryLRUStore) EnsureCandidate(_ context.Context, keyID domain.ID, providerID domain.ID) error {
+func (s *MemoryLRUStore) EnsureCandidate(_ context.Context, keyID domain.ID, providerID domain.ID) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.providerByKey[keyID] = providerID
@@ -170,4 +199,18 @@ func (s *memoryLRUStore) EnsureCandidate(_ context.Context, keyID domain.ID, pro
 		m[keyID] = time.Time{} // nunca usada → primeira da fila LRU
 	}
 	return nil
+}
+
+// FlushDirty retorna os timestamps dirty (keyID -> lastUsedAt) e zera o set.
+// O flusher periódico chama este método para persistir last_used_at no DB.
+// Retorna nil se não há entries dirty.
+func (s *MemoryLRUStore) FlushDirty() map[domain.ID]time.Time {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if len(s.dirty) == 0 {
+		return nil
+	}
+	out := s.dirty
+	s.dirty = make(map[domain.ID]time.Time)
+	return out
 }
