@@ -13,6 +13,13 @@ data:
   HTTP_ADDR: {{ .Values.app.httpAddr | quote }}
   HTTP_READ_HEADER_TIMEOUT: {{ .Values.app.httpReadHeaderTimeout | quote }}
 
+  # Upstream timeouts (provedores LLM). CRÍTICO para modelos de raciocínio
+  # (glm-5.2, etc.) que pausam >30s antes do 1º byte. Defaults do config.go
+  # (30s) causavam failover-spin ~124s → 502/499 intermitentes.
+  UPSTREAM_RESPONSE_HEADER_TIMEOUT: {{ .Values.app.upstreamResponseHeaderTimeout | quote }}
+  UPSTREAM_FIRST_BYTE_TIMEOUT: {{ .Values.app.upstreamFirstByteTimeout | quote }}
+  UPSTREAM_IDLE_CHUNK_TIMEOUT: {{ .Values.app.upstreamIdleChunkTimeout | quote }}
+
   # Modo produção
   DEV_MODE: {{ .Values.app.devMode | quote }}
   SSRF_ALLOW_HTTP: {{ .Values.app.ssrfAllowHTTP | quote }}

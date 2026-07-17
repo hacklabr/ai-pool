@@ -85,6 +85,14 @@ app:
   shutdownTimeout: "60s"
   preStopSleep: "10s"
 
+  # Timeouts do upstream (provedores LLM). Valores GENEROSOS pois modelos de
+  # raciocínio (glm-5.2, estilo o1) pausam >30s antes do 1º byte e entre chunks.
+  # Defaults do config.go (30s/30s/60s) eram agressivos demais e causavam
+  # failover-spin ~124s através das chaves → 502/499 intermitentes.
+  upstreamResponseHeaderTimeout: "300s"   # tempo até provedor enviar headers (non-stream)
+  upstreamFirstByteTimeout: "300s"        # tempo até 1º chunk útil (streaming)
+  upstreamIdleChunkTimeout: "180s"        # intervalo máximo entre chunks (streaming)
+
   # Feature flags (preparação ROADMAP)
   enableMetrics: "false"    # endpoint /metrics (off no MVP)
 

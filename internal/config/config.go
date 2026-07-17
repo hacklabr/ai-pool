@@ -96,10 +96,10 @@ func Load() (*Config, error) {
 
 		UpstreamDialTimeout:           getduration("UPSTREAM_DIAL_TIMEOUT", 5*time.Second),
 		UpstreamTLSHandshakeTimeout:   getduration("UPSTREAM_TLS_HANDSHAKE_TIMEOUT", 5*time.Second),
-		UpstreamResponseHeaderTimeout: getduration("UPSTREAM_RESPONSE_HEADER_TIMEOUT", 30*time.Second),
+		UpstreamResponseHeaderTimeout: getduration("UPSTREAM_RESPONSE_HEADER_TIMEOUT", 5*time.Minute),
 		UpstreamOverallTimeout:        getduration("UPSTREAM_OVERALL_TIMEOUT", 10*time.Minute),
-		UpstreamFirstByteTimeout:      getduration("UPSTREAM_FIRST_BYTE_TIMEOUT", 30*time.Second),
-		UpstreamIdleChunkTimeout:      getduration("UPSTREAM_IDLE_CHUNK_TIMEOUT", 60*time.Second),
+		UpstreamFirstByteTimeout:      getduration("UPSTREAM_FIRST_BYTE_TIMEOUT", 5*time.Minute),
+		UpstreamIdleChunkTimeout:      getduration("UPSTREAM_IDLE_CHUNK_TIMEOUT", 3*time.Minute),
 		UpstreamMaxIdleConnsPerHost:   getenvInt("UPSTREAM_MAX_IDLE_CONNS_PER_HOST", 100),
 		RequestBodyMaxBytes:           getenvInt64("REQUEST_BODY_MAX_BYTES", 10*1024*1024),
 

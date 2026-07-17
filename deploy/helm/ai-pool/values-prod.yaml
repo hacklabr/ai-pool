@@ -57,6 +57,12 @@ app:
   shutdownTimeout: "60s"
   preStopSleep: "10s"
 
+  # Timeouts do upstream — generosos para modelos de raciocínio (glm-5.2).
+  # Sem isso, o default 30s do config.go causa failover-spin ~124s → 502/499.
+  upstreamResponseHeaderTimeout: "300s"
+  upstreamFirstByteTimeout: "300s"
+  upstreamIdleChunkTimeout: "180s"
+
   # /metrics endpoint (gated; sem Prometheus no cluster ainda).
   enableMetrics: "false"
 
