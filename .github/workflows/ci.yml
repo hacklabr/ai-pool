@@ -119,7 +119,7 @@ jobs:
       # em severity HIGH.
       #
       # NOTA: NÃO usamos mais `securego/gosec@master` (action Docker) porque
-      # o container embute Go 1.26.3 e o go.mod exige 1.26.4 → gosec não
+      # o container embute Go 1.26.3 e o go.mod exige 1.26.5 → gosec não
       # conseguia carregar packages (GOTOOLCHAIN=local dentro do container
       # não baixa versão nova). Instalando via `go install` usamos o mesmo
       # Go do setup-go acima.
