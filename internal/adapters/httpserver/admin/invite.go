@@ -194,7 +194,9 @@ func writeRateLimited(w http.ResponseWriter, message string, retrySec int) {
 
 // activeModels retorna os modelos ativos da organização no formato do OpenCode.
 // Modelos multimodais incluem o bloco "modalities" no formato esperado pelo
-// @ai-sdk/openai-compatible.
+// @ai-sdk/openai-compatible. O bloco "limit" (tokens) é emitido quando o modelo
+// tem contexto e/ou limite de saída cadastrados — segue o schema do OpenCode
+// (provider.{id}.models.{model}.limit = {context, output, input?}).
 func (a *App) activeModels(ctx context.Context, orgID domain.OrganizationID) (map[string]any, error) {
 	all, err := a.modelRepo.ListAll(ctx, orgID)
 	if err != nil {
@@ -215,6 +217,18 @@ func (a *App) activeModels(ctx context.Context, orgID domain.OrganizationID) (ma
 				"input":  []string{"text", "image"},
 				"output": []string{"text"},
 			}
+		}
+		// Bloco "limit": emitido apenas se houver contexto e/ou saída. Ambos
+		// opcionais individualmente (nullable na tabela).
+		limit := map[string]any{}
+		if m.ContextWindow != nil && *m.ContextWindow > 0 {
+			limit["context"] = *m.ContextWindow
+		}
+		if m.OutputLimit != nil && *m.OutputLimit > 0 {
+			limit["output"] = *m.OutputLimit
+		}
+		if len(limit) > 0 {
+			model["limit"] = limit
 		}
 		out[m.Name] = model
 	}

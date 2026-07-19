@@ -29,13 +29,14 @@ func (r *ModelRepo) Create(ctx context.Context, m *domain.Model) (domain.ID, err
 		return 0, fmt.Errorf("ModelRepo.Create: nil model")
 	}
 	const q = `
-		INSERT INTO models (provider_id, organization_id, name, display_name, context_window, modalities, is_active)
-		VALUES ($1, $2, $3, $4, $5, $6, COALESCE($7, true))
+		INSERT INTO models (provider_id, organization_id, name, display_name, context_window, output_limit, modalities, is_active)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, COALESCE($8, true))
 		RETURNING id`
 	var id int64
 	err := r.pool.QueryRow(ctx, q,
 		int64(m.ProviderID), int64(m.OrgID), m.Name,
 		ptrToText(m.DisplayName), int4ToNullable(m.ContextWindow),
+		int4ToNullable(m.OutputLimit),
 		modalitiesToJSONB(m.Modalities),
 		m.IsActive,
 	).Scan(&id)
@@ -99,7 +100,7 @@ func int4ToNullable(i *int) pgtype.Int4 {
 func (r *ModelRepo) ListAll(ctx context.Context, orgID domain.OrganizationID) ([]domain.Model, error) {
 	const q = `
 		SELECT id, provider_id, organization_id, name, display_name, context_window,
-		       model_aliases, model_pricing, modalities, is_active, created_at, updated_at
+		       output_limit, model_aliases, model_pricing, modalities, is_active, created_at, updated_at
 		FROM models
 		WHERE organization_id = $1
 		ORDER BY name`
@@ -124,7 +125,7 @@ func (r *ModelRepo) ListAll(ctx context.Context, orgID domain.OrganizationID) ([
 func (r *ModelRepo) GetByID(ctx context.Context, orgID domain.OrganizationID, id domain.ID) (*domain.Model, error) {
 	const q = `
 		SELECT id, provider_id, organization_id, name, display_name, context_window,
-		       model_aliases, model_pricing, modalities, is_active, created_at, updated_at
+		       output_limit, model_aliases, model_pricing, modalities, is_active, created_at, updated_at
 		FROM models
 		WHERE organization_id = $1 AND id = $2`
 	row := r.pool.QueryRow(ctx, q, int64(orgID), int64(id))
@@ -138,7 +139,7 @@ func (r *ModelRepo) GetByID(ctx context.Context, orgID domain.OrganizationID, id
 	return m, nil
 }
 
-// Update altera nome, display_name, context_window e is_active de um modelo.
+// Update altera nome, display_name, context_window, output_limit e is_active de um modelo.
 // provider_id não é alterado (se necessário, recriar o modelo).
 func (r *ModelRepo) Update(ctx context.Context, orgID domain.OrganizationID, m *domain.Model) error {
 	if m == nil {
@@ -146,11 +147,12 @@ func (r *ModelRepo) Update(ctx context.Context, orgID domain.OrganizationID, m *
 	}
 	const q = `
 		UPDATE models
-		SET name = $3, display_name = $4, context_window = $5, modalities = $6, is_active = $7, updated_at = now()
+		SET name = $3, display_name = $4, context_window = $5, output_limit = $6, modalities = $7, is_active = $8, updated_at = now()
 		WHERE organization_id = $1 AND id = $2`
 	tag, err := r.pool.Exec(ctx, q,
 		int64(orgID), int64(m.ID), m.Name,
 		ptrToText(m.DisplayName), int4ToNullable(m.ContextWindow),
+		int4ToNullable(m.OutputLimit),
 		modalitiesToJSONB(m.Modalities), m.IsActive,
 	)
 	if err != nil {
@@ -211,13 +213,14 @@ func scanModel(row pgx.Row) (*domain.Model, error) {
 		orgID       int64
 		displayName pgtype.Text
 		ctxWindow   pgtype.Int4
+		outLimit    pgtype.Int4
 		_aliases    []byte
 		_pricing    []byte
 		modalitiesB []byte
 	)
 	err := row.Scan(
 		&m.ID, &providerID, &orgID, &m.Name, &displayName, &ctxWindow,
-		&_aliases, &_pricing, &modalitiesB, &m.IsActive, &m.CreatedAt, &m.UpdatedAt,
+		&outLimit, &_aliases, &_pricing, &modalitiesB, &m.IsActive, &m.CreatedAt, &m.UpdatedAt,
 	)
 	if err != nil {
 		return nil, err
@@ -228,6 +231,10 @@ func scanModel(row pgx.Row) (*domain.Model, error) {
 	if ctxWindow.Valid {
 		cw := int(ctxWindow.Int32)
 		m.ContextWindow = &cw
+	}
+	if outLimit.Valid {
+		ol := int(outLimit.Int32)
+		m.OutputLimit = &ol
 	}
 	if len(modalitiesB) > 0 && string(modalitiesB) != "[]" {
 		_ = json.Unmarshal(modalitiesB, &m.Modalities)

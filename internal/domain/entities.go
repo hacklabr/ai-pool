@@ -190,8 +190,13 @@ type Model struct {
 	OrgID         OrganizationID
 	Name          string // nome real no provedor, ex.: "deepseek-chat"
 	DisplayName   *string
-	ContextWindow *int     // tokens
-	Modalities    []string // ex.: ["text","image"] — vazio = texto apenas
+	ContextWindow *int // tokens (janela total: input+output suportado)
+	// OutputLimit é o máximo de tokens que o modelo pode GERAR por resposta
+	// (ex.: 8192). Distinto de ContextWindow: GLM-5.2 tem 128k de contexto mas
+	// ~8k de output. Usado para montar o bloco "limit.output" da config do
+	// OpenCode e para calibrar max_tokens nos requests. Nullable.
+	OutputLimit *int     // tokens de saída por resposta
+	Modalities  []string // ex.: ["text","image"] — vazio = texto apenas
 	IsActive      bool
 	CreatedAt     time.Time
 	UpdatedAt     time.Time

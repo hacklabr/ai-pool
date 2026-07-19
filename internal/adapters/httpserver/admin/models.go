@@ -54,6 +54,7 @@ type modelListItem struct {
 	Name          string    `json:"name"`
 	DisplayName   *string   `json:"display_name,omitempty"`
 	ContextWindow *int      `json:"context_window,omitempty"`
+	OutputLimit   *int      `json:"output_limit,omitempty"`
 	Multimodal    bool      `json:"multimodal"`
 	IsActive      bool      `json:"is_active"`
 	CreatedAt     time.Time `json:"created_at"`
@@ -65,6 +66,7 @@ type createModelRequest struct {
 	Name          string `json:"name"`
 	DisplayName   string `json:"display_name"`
 	ContextWindow *int   `json:"context_window"`
+	OutputLimit   *int   `json:"output_limit"`
 	Multimodal    bool   `json:"multimodal"`
 }
 
@@ -74,7 +76,7 @@ func (a *App) listModelsQuery(r *http.Request, orgID int64) []modelListItem {
 	out := make([]modelListItem, 0)
 	rows, err := a.pool.Query(r.Context(), `
 		SELECT m.id, m.provider_id, p.name, p.slug, m.name,
-		       m.display_name, m.context_window, m.modalities, m.is_active, m.created_at
+		       m.display_name, m.context_window, m.output_limit, m.modalities, m.is_active, m.created_at
 		FROM models m
 		JOIN providers p ON p.id = m.provider_id
 		WHERE m.organization_id = $1
@@ -88,7 +90,7 @@ func (a *App) listModelsQuery(r *http.Request, orgID int64) []modelListItem {
 		var displayName *string
 		var modalitiesJSON []byte
 		if err := rows.Scan(&m.ID, &m.ProviderID, &m.ProviderName, &m.ProviderSlug,
-			&m.Name, &displayName, &m.ContextWindow, &modalitiesJSON, &m.IsActive, &m.CreatedAt); err == nil {
+			&m.Name, &displayName, &m.ContextWindow, &m.OutputLimit, &modalitiesJSON, &m.IsActive, &m.CreatedAt); err == nil {
 			m.DisplayName = displayName
 			m.Multimodal = jsonHasImage(modalitiesJSON)
 			out = append(out, m)
@@ -156,6 +158,7 @@ func (a *App) handleAdminCreateModel(w http.ResponseWriter, r *http.Request) {
 		m.DisplayName = &req.DisplayName
 	}
 	m.ContextWindow = req.ContextWindow
+	m.OutputLimit = req.OutputLimit
 	if req.Multimodal {
 		m.Modalities = []string{"text", "image"}
 	}
@@ -181,6 +184,7 @@ type updateModelRequest struct {
 	Name          string `json:"name"`
 	DisplayName   string `json:"display_name"`
 	ContextWindow *int   `json:"context_window"`
+	OutputLimit   *int   `json:"output_limit"`
 	IsActive      bool   `json:"is_active"`
 	Multimodal    bool   `json:"multimodal"`
 }
@@ -226,6 +230,7 @@ func (a *App) handleAdminGetModel(w http.ResponseWriter, r *http.Request) {
 			Name:          m.Name,
 			DisplayName:   m.DisplayName,
 			ContextWindow: m.ContextWindow,
+			OutputLimit:   m.OutputLimit,
 			Multimodal:    m.IsMultimodal(),
 			IsActive:      m.IsActive,
 			CreatedAt:     m.CreatedAt,
@@ -262,6 +267,7 @@ func (a *App) handleAdminUpdateModel(w http.ResponseWriter, r *http.Request) {
 		Name:          req.Name,
 		IsActive:      req.IsActive,
 		ContextWindow: req.ContextWindow,
+		OutputLimit:   req.OutputLimit,
 	}
 	if req.DisplayName != "" {
 		m.DisplayName = &req.DisplayName

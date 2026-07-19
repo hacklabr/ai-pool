@@ -39,6 +39,12 @@
               {{if $m.ContextWindow}}{{$m.ContextWindow}} tokens{{else}}<span class="u-text-subtle">(não informada)</span>{{end}}
             </span>
           </div>
+          <div class="c-provider-card__field">
+            <span class="c-provider-card__field-label">Limite de saída</span>
+            <span class="c-provider-card__field-value">
+              {{if $m.OutputLimit}}{{$m.OutputLimit}} tokens{{else}}<span class="u-text-subtle">(não informado)</span>{{end}}
+            </span>
+          </div>
           {{if $m.Multimodal}}
             <div class="c-provider-card__field">
               <span class="c-provider-card__field-label">Modalidades</span>
@@ -130,6 +136,12 @@
                placeholder="128000">
       </div>
       <div class="c-form-field">
+        <label for="new-model-out">Limite de saída em tokens (opcional)</label>
+        <input id="new-model-out" name="output_limit" type="number" min="1"
+               placeholder="8192">
+        <p class="c-form-field__hint">Máximo de tokens que o modelo gera por resposta (ex.: 8192).</p>
+      </div>
+      <div class="c-form-field">
         <label>
           <input type="checkbox" name="multimodal" value="true">
           Multimodal (aceita imagem como entrada)
@@ -169,6 +181,12 @@
         <label for="edit-model-ctx-{{$m.ID}}">Janela de contexto em tokens (opcional)</label>
         <input id="edit-model-ctx-{{$m.ID}}" name="context_window" type="number" min="1"
                value="{{if $m.ContextWindow}}{{$m.ContextWindow}}{{end}}">
+      </div>
+      <div class="c-form-field">
+        <label for="edit-model-out-{{$m.ID}}">Limite de saída em tokens (opcional)</label>
+        <input id="edit-model-out-{{$m.ID}}" name="output_limit" type="number" min="1"
+               value="{{if $m.OutputLimit}}{{$m.OutputLimit}}{{end}}">
+        <p class="c-form-field__hint">Máximo de tokens que o modelo gera por resposta.</p>
       </div>
       <div class="c-form-field">
         <label>
