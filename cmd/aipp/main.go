@@ -44,6 +44,7 @@ import (
 	"github.com/hacklabr/ai-pool/internal/adapters/store"
 	"github.com/hacklabr/ai-pool/internal/config"
 	"github.com/hacklabr/ai-pool/internal/domain"
+	"github.com/hacklabr/ai-pool/internal/modelsync"
 	"github.com/hacklabr/ai-pool/internal/routing"
 	"github.com/hacklabr/ai-pool/internal/usage"
 	"github.com/hacklabr/ai-pool/migrations"
@@ -61,6 +62,11 @@ func main() {
 		// isolado para evitar N réplicas competindo e para falhar o deploy
 		// antes de qualquer pod subir com schema inconsistente.
 		migrateOnly = flag.Bool("migrate-only", false, "run migrations from embedded FS against DATABASE_URL and exit (exit 0 on success, 1 on failure); used by Helm Job hook")
+		// syncModels: roda UMA rodada do modelsync (RF-11, ADR-0015) e sai.
+		// Idempotente e fail-safe: falhas individuais de provedor não afetam
+		// o exit code; exit 1 apenas em falha estrutural (DB indisponível,
+		// KEK configurada mas ilegível). Chamado pelo Helm Job após migrate.
+		syncModels = flag.Bool("sync-models", false, "sync the model catalog from all active providers and exit (exit 0 even when providers fail; exit 1 only on structural failure)")
 	)
 	flag.Parse()
 
@@ -77,6 +83,12 @@ func main() {
 	// Não abre pool pgx, não inicia servidor, não toca em KEK/pepper.
 	if *migrateOnly {
 		os.Exit(runMigrateOnly(cfg, logger))
+	}
+
+	// === Modo CLI: sync-models (Helm Job hook, após migrate) ===
+	// Roda antes de iniciar o servidor: sincroniza o catálogo de modelos e sai.
+	if *syncModels {
+		os.Exit(runSyncModels(cfg, logger))
 	}
 
 	// === Modo CLI: bootstrap-admin ===
@@ -185,6 +197,25 @@ func main() {
 		rollupJob = usage.NewRollupJob(usageRepo, cfg.DefaultOrgID, time.Minute, logger)
 	}
 
+	// === Model Sync (RF-11) ===
+	// Job periódico que reconcilia a tabela models com a listagem de cada
+	// provedor (ADR-0015). Intervalo 0 = job desativado (o CLI --sync-models
+	// continua disponível). O sync inicial roda dentro de Start, que o caller
+	// invoca em goroutine — nunca bloqueia readiness (fail-open).
+	var modelSyncJob *modelsync.Job
+	if pool != nil && cfg.ModelSyncInterval > 0 {
+		syncer := modelsync.NewSyncer(
+			postgres.NewProviderRepo(pool),
+			postgres.NewKeyRepo(pool),
+			postgres.NewModelRepo(pool),
+			buildDecryptor(cfg, logger),
+			upstreamClient,
+			logger,
+			domain.OrganizationID(cfg.DefaultOrgID),
+		)
+		modelSyncJob = modelsync.NewJob(syncer, cfg.ModelSyncInterval, logger)
+	}
+
 	// === HTTP servers ===
 	// Beego placeholder "/" — adminApp.Handler() já trata "/" também; mas
 	// mantemos registro Beego para compat futura com templates em F8.
@@ -194,6 +225,11 @@ func main() {
 	// F6: injeta rate limiter + usage collector no proxy.
 	proxyServer.SetRateLimiter(rateLimiter)
 	proxyServer.SetUsageCollector(usageCollector)
+	// RF-12: catálogo local para GET /v1/models (agregado, com dedup por nome).
+	// Sem DB o endpoint responde 503 graceful.
+	if pool != nil {
+		proxyServer.SetModelCatalog(postgres.NewModelRepo(pool), postgres.NewProviderRepo(pool))
+	}
 	// F6: injeta rate limiter no admin (para /web/login brute-force protection).
 	if adminApp != nil {
 		adminApp.SetRateLimiter(rateLimiter)
@@ -237,6 +273,13 @@ func main() {
 		rollupCtx, rollupCancel := context.WithCancel(context.Background())
 		go rollupJob.Start(rollupCtx)
 		defer rollupCancel()
+	}
+
+	// Inicia model sync job (background goroutine).
+	if modelSyncJob != nil {
+		syncCtx, syncCancel := context.WithCancel(context.Background())
+		go modelSyncJob.Start(syncCtx)
+		defer syncCancel()
 	}
 
 	// Admin handler: real se DB conectado, stub 503 caso contrário.
@@ -432,6 +475,78 @@ func runMigrateOnly(cfg *config.Config, logger *slog.Logger) int {
 	}
 
 	fmt.Fprintf(os.Stderr, "OK: schema at version %d (dirty=%v).\n", version, dirty)
+	return 0
+}
+
+// runSyncModels é o handler do subcomando `aipp --sync-models` (RF-11,
+// ADR-0015). Executa UMA rodada de sincronização do catálogo de modelos e sai.
+//
+// Exit codes:
+//
+//	0 — rodada concluída, INCLUSIVE quando não há providers/chaves (nada a
+//	    fazer) ou quando provedores individuais falham (fail-safe: constam
+//	    como skipped no relatório).
+//	1 — falha estrutural: DATABASE_URL ausente, DB indisponível, KEK
+//	    configurada mas ilegível, ou falha de DB durante a rodada.
+//
+// É chamado pelo Helm migration Job após o passo de migrate (pós-install/
+// upgrade), para que a instalação já nasça com o catálogo populado.
+// Idempotente: a reconciliação é não-destrutiva por desenho.
+func runSyncModels(cfg *config.Config, logger *slog.Logger) int {
+	if cfg.DBDSN == "" {
+		logger.Error("--sync-models: DATABASE_URL (or DB_DSN) is required")
+		return 1
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+
+	pool, err := postgres.NewPool(ctx, cfg)
+	if err != nil {
+		logger.Error("--sync-models: postgres connect failed", "err", err)
+		return 1
+	}
+	defer pool.Close()
+
+	// Decryptor: KEK configurada mas ilegível é falha ESTRUTURAL (exit 1) —
+	// sem ela nenhuma chave decifra. Sem KEK_PATH (dev), usa IdentityDecryptor.
+	var decryptor domain.KeyDecryptor
+	if cfg.KEKPath != "" {
+		kek, err := crypto.LoadKEKFromFile(cfg.KEKPath)
+		if err != nil {
+			logger.Error("--sync-models: failed to load KEK", "err", err)
+			return 1
+		}
+		aes := crypto.NewAESGCMCrypto("v1")
+		if err := aes.AddKEK("v1", kek); err != nil {
+			logger.Error("--sync-models: failed to add KEK v1", "err", err)
+			return 1
+		}
+		decryptor = aes
+	} else {
+		logger.Warn("--sync-models: KEK_PATH not configured; using IdentityDecryptor (dev only)")
+		decryptor = store.NewIdentityDecryptor()
+	}
+
+	syncer := modelsync.NewSyncer(
+		postgres.NewProviderRepo(pool),
+		postgres.NewKeyRepo(pool),
+		postgres.NewModelRepo(pool),
+		decryptor,
+		proxy.NewUpstreamClient(cfg),
+		logger,
+		domain.OrganizationID(cfg.DefaultOrgID),
+	)
+
+	report, err := syncer.SyncAll(ctx)
+	if err != nil {
+		// Falha estrutural (DB durante a rodada).
+		logger.Error("--sync-models: sync failed", "err", err)
+		return 1
+	}
+
+	fmt.Fprint(os.Stderr, report.String())
+	logger.Info("--sync-models: done")
 	return 0
 }
 
@@ -804,10 +919,12 @@ func composeHandler(proxyHandler, adminHandler, beegoHandler http.Handler) http.
 			proxyHandler.ServeHTTP(w, r)
 			return
 		}
-		// 3. Admin App: UI /web, /static (assets embed), "/" raiz e convites /invite.
+		// 3. Admin App: UI /web, /static (assets embed), "/" raiz, convites
+		//    /invite e scripts públicos de setup (/setup/update-models.sh, RF-13).
 		if hasPrefix(p, "/web/") || p == "/web" ||
 			hasPrefix(p, "/static/") ||
 			hasPrefix(p, "/invite/") || p == "/invite" ||
+			hasPrefix(p, "/setup/") ||
 			p == "/" {
 			adminHandler.ServeHTTP(w, r)
 			return

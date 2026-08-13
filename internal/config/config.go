@@ -76,6 +76,11 @@ type Config struct {
 	RateLimitBurst     int
 	RateLimitPerMin    int
 
+	// ModelSyncInterval é o intervalo do job de sincronização do catálogo de
+	// modelos (RF-11, ADR-0015). Default 6h; 0 desativa o job periódico
+	// (o CLI --sync-models continua disponível).
+	ModelSyncInterval time.Duration
+
 	// Organização default (multi-tenant ready)
 	DefaultOrgID int64
 
@@ -127,6 +132,9 @@ func Load() (*Config, error) {
 		AffinityMaxPerUser: getenvInt("AFFINITY_MAX_PER_USER", 50),
 		RateLimitBurst:     getenvInt("RATE_LIMIT_BURST", 10),
 		RateLimitPerMin:    getenvInt("RATE_LIMIT_PER_MIN", 60),
+
+		// Go duration ("6h", "30m"); "0" desativa o job periódico.
+		ModelSyncInterval: getduration("AIPP_MODEL_SYNC_INTERVAL", 6*time.Hour),
 
 		DefaultOrgID: getenvInt64("DEFAULT_ORG_ID", 1),
 

@@ -12,9 +12,18 @@
           Deployment, Secrets, Services, Ingress, etc.).
        2. Helm roda hooks post-install (este Job).
        3. Init container wait-for-db faz loop pg_isready até postgres responder.
-       4. Container principal roda `aipp --migrate-only`.
-       5. Sucesso (exit 0) → Helm declara install completo.
-       6. Falha (exit 1) → Helm marca release como FAILED (visível em helm status).
+       4. Init container migrate roda `aipp --migrate-only` (initContainers
+          rodam em sequência — migrate SEMPRE completa antes do sync).
+       5. Container principal roda `aipp --sync-models` (RF-11, ADR-0015):
+          a instalação já nasce com o catálogo de modelos populado.
+          Falhas de provedores individuais NÃO reprovam o hook — o CLI é
+          fail-safe e sai 0; exit 1 só em falha estrutural (DB/KEK).
+       6. Sucesso (exit 0) → Helm declara install completo.
+       7. Falha (exit 1) → Helm marca release como FAILED (visível em helm status).
+
+     Por que dois estágios (init + main) em vez de `sh -c "migrate && sync"`:
+     a imagem é distroless (sem shell). initContainers garantem a ordem
+     migrate → sync com a mesma imagem.
 
      Efeito no app durante 1ª instalação:
        - O app Deployment começa a subir em paralelo com o postgres.
@@ -80,11 +89,11 @@ spec:
       {{- end }}
       securityContext:
         {{- toYaml .Values.podSecurityContext | nindent 8 }}
-      {{- if .Values.postgresql.enabled }}
-      # === Init container: espera postgres ficar Ready ===
-      # Necessário em post-install: o StatefulSet existe mas o pod pode
-      # ainda estar inicializando (PVC binding + postgres initdb).
       initContainers:
+        {{- if .Values.postgresql.enabled }}
+        # === Init container: espera postgres ficar Ready ===
+        # Necessário em post-install: o StatefulSet existe mas o pod pode
+        # ainda estar inicializando (PVC binding + postgres initdb).
         - name: wait-for-db
           image: {{ .Values.postgresql.image.repository }}:{{ .Values.postgresql.image.tag }}
           imagePullPolicy: IfNotPresent
@@ -112,13 +121,15 @@ spec:
             limits:
               cpu: 100m
               memory: 64Mi
-      {{- end }}
-      containers:
+        {{- end }}
+        # === Init container: migrations ===
+        # Roda APÓS wait-for-db e ANTES do sync (ordem garantida pelos
+        # initContainers). Falha aqui aborta o Job — nunca sincronizamos um
+        # catálogo sobre schema inconsistente.
         - name: migrate
           image: {{ include "ai-pool.image" . }}
           imagePullPolicy: {{ .Values.image.pullPolicy }}
           # Flag --migrate-only: roda RunMigrations do embed.FS e sai.
-          # NÃO precisa do ConfigMap/Secrets de aplicação — apenas DATABASE_URL.
           args:
             - --migrate-only
           env:
@@ -128,9 +139,46 @@ spec:
                   name: {{ include "ai-pool.dbSecretName" . }}
                   key: {{ .Values.database.secretKey }}
                   optional: false
-            # DEV_MODE=false ativa validação de produção. Migrate-only não usa
-            # KEK/pepper, mas config.Validate exige os campos preenchidos.
-            # Montamos o mesmo Secret do Deployment em /etc/aipp (readOnly).
+            - name: DEV_MODE
+              value: "false"
+            - name: SSRF_ALLOW_HTTP
+              value: "false"
+            - name: KEK_PATH
+              value: /etc/aipp/kek
+            - name: TOKEN_PEPPER_PATH
+              value: /etc/aipp/token_pepper
+            - name: LOG_FORMAT
+              value: "json"
+            - name: LOG_LEVEL
+              value: "info"
+          volumeMounts:
+            - name: app-secrets
+              mountPath: /etc/aipp
+              readOnly: true
+          resources:
+            {{- toYaml .Values.migrations.resources | nindent 12 }}
+          securityContext:
+            {{- toYaml .Values.containerSecurityContext | nindent 12 }}
+      containers:
+        # === Container principal: sync do catálogo de modelos (RF-11) ===
+        # Roda DEPOIS das migrations (initContainer migrate). O CLI é
+        # fail-safe: provedor fora do ar/sem chave sai 0; exit 1 só em falha
+        # estrutural (DB indisponível, KEK ilegível) — que DEVE reprovar o hook.
+        - name: sync-models
+          image: {{ include "ai-pool.image" . }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          args:
+            - --sync-models
+          env:
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "ai-pool.dbSecretName" . }}
+                  key: {{ .Values.database.secretKey }}
+                  optional: false
+            # DEV_MODE=false ativa validação de produção. O sync PRECISA da
+            # KEK (decripta uma chave por provedor) — montamos o mesmo Secret
+            # do Deployment em /etc/aipp (readOnly).
             - name: DEV_MODE
               value: "false"
             - name: SSRF_ALLOW_HTTP

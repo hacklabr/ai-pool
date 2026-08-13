@@ -197,9 +197,9 @@ type Model struct {
 	// OpenCode e para calibrar max_tokens nos requests. Nullable.
 	OutputLimit *int     // tokens de saída por resposta
 	Modalities  []string // ex.: ["text","image"] — vazio = texto apenas
-	IsActive      bool
-	CreatedAt     time.Time
-	UpdatedAt     time.Time
+	IsActive    bool
+	CreatedAt   time.Time
+	UpdatedAt   time.Time
 }
 
 // IsMultimodal retorna true se o modelo aceita imagem como entrada.

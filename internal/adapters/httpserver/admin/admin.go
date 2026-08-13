@@ -193,6 +193,9 @@ func (a *App) Handler() http.Handler {
 	// Convites: script de setup (GET) e aceite (POST) são públicos.
 	mux.HandleFunc("GET /invite/{token}", a.handleInviteScript)
 	mux.HandleFunc("POST /api/web/invite/{token}/accept", a.handleInviteAccept)
+	// RF-13: script público de atualização do catálogo no cliente OpenCode
+	// (não carrega segredo — o token sai do arquivo local do usuário).
+	mux.HandleFunc("GET /setup/update-models.sh", a.handleUpdateModelsScript)
 	// Usamos /{$} (match EXATO em "/", sem subtree) para evitar conflito com
 	// os mounts "/web/me/", "/web/dashboard", "/web/admin/", "/api/web/me/",
 	// "/api/web/admin/" — o Go 1.22+ ServeMux panic se "GET /" (subtree)

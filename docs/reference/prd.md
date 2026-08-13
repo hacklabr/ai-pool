@@ -134,6 +134,46 @@ golang-migrate · Helm chart com PostgreSQL embutido · imagem distroless nonroo
 - Bootstrap de admin via CLI one-shot idempotente (`aipp --bootstrap-admin-...`,
   senha ≥ 12 chars); migrations via `aipp --migrate-only` (Helm post-install Job).
 
+### RF-11 — Sincronização automática do catálogo de modelos
+- Job periódico in-process (pacote `internal/modelsync/`, padrão RollupJob)
+  consulta `GET {base_url}/models` de cada provedor ativo (1 chave usável,
+  Bearer decriptada, timeout ~30 s por provedor) e reconcilia a tabela `models`.
+- Reconciliação **fail-safe** (ADR-0015): provedor OK → adiciona novos (ativos,
+  só com nome), reativa os que retornaram, **desativa** os ausentes; provedor
+  indisponível/sem chave/resposta inválida → **nenhuma alteração**.
+- **Nunca deleta** linhas; **nunca sobrescreve** enriquecimento manual
+  (`context_window`, `output_limit`, `modalities`, `model_pricing`,
+  `model_aliases`) de modelos existentes.
+- CLI idempotente `aipp --sync-models` (padrão `--migrate-only`) roda uma
+  rodada e sai: exit 0 mesmo com provedores falhando (fail-safe); exit 1 só em
+  falha estrutural (DB indisponível, KEK ilegível). Executado pelo Helm Job
+  após as migrations — instalação nasce com o catálogo populado.
+- Intervalo via env `AIPP_MODEL_SYNC_INTERVAL` (Go duration, default 6h;
+  `0` desativa o job periódico). Sync inicial assíncrono no boot (fail-open,
+  nunca bloqueia readiness).
+
+### RF-12 — Listagem agregada de modelos
+- `GET /v1/models` e `GET /api/models` autenticados pelo mesmo middleware do
+  proxy (Bearer `sk-aipp-...`; sem token → 401), respondendo a partir do
+  **catálogo local** (modelos ativos de provedores ativos da organização).
+- Formato OpenAI: `{"object":"list","data":[{"id","object":"model","created",
+  "owned_by":<provider slug>}]}`, com dedup por nome (primeiro provedor ativo
+  vence — mesma precedência do hot path).
+- Variante `?format=opencode`: mapa no schema OpenCode
+  (`provider.models.{id} = {name, modalities?, limit?}`), mesmo formato do
+  aceite de convite (lógica compartilhada em
+  `internal/adapters/httpserver/modelcatalog`).
+
+### RF-13 — Script de atualização do cliente OpenCode
+- Rota pública `GET /setup/update-models.sh` (admin mux, junto a `/invite`)
+  serve script bash (`curl | bash`) com `set -euo pipefail`, exigindo `jq`.
+- O script lê `$OPENCODE_CONFIG` ou `~/.config/opencode/opencode.json`,
+  extrai `apiKey`/`baseURL` do provider `llm-pool` (ausentes → mensagem
+  amigável instruindo rodar o instalador), faz backup
+  (`opencode.json.bak-<timestamp>`), chama `GET {baseURL}/models?format=opencode`
+  e reescreve **apenas** `provider["llm-pool"].models` via jq, preservando
+  todo o restante da configuração. Nunca ecoa o token.
+
 ## 3. Requisitos não-funcionais
 
 ### RNF-S — Segurança
@@ -208,5 +248,4 @@ golang-migrate · Helm chart com PostgreSQL embutido · imagem distroless nonroo
 - Failover cross-provider (risco de truncamento por context windows diferentes).
 - mTLS interno; **rotação de KEK automatizada** (procedimento manual documentado
   em `internal/adapters/crypto/envelope.go`); Cosign + SLSA (placeholder no CI).
-- Listagem `GET /v1/models` sem body (não suportado hoje); expiração de token
-  configurável na UI (campo existe, form não expõe).
+- Expiração de token configurável na UI (campo existe, form não expõe).
