@@ -1,6 +1,6 @@
 # ADR-0015 — Sincronização automática do catálogo de modelos
 
-**Status:** proposto
+**Status:** aceito
 
 **Contexto:** o catálogo de modelos (tabela `models`) era cadastrado exclusivamente
 à mão: modelos novos dos provedores ficavam inacessíveis até alguém cadastrá-los,
