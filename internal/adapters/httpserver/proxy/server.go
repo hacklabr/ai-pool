@@ -56,6 +56,9 @@ type Server struct {
 	rateLimiter domain.RateLimiter
 	// usageCollector (opcional, F6). Se nil, não registra uso.
 	usageCollector domain.UsageCollector
+	// modelLister/providerLister (RF-12). Se nil, GET /v1/models responde 503.
+	modelLister    modelCatalogLister
+	providerLister activeProviderLister
 }
 
 // FailoverExecuter é a porta mínima do orquestrador de failover que o proxy
@@ -155,6 +158,14 @@ func (s *Server) Handler() http.Handler {
 		mux.Handle("GET /metrics", promhttp.Handler())
 	}
 
+	// GET /v1/models e /api/models (RF-12): listagem agregada do catálogo
+	// local, com o MESMO AuthMiddleware do proxy. Os patterns com método +
+	// path exato são mais específicos que os subtrees "/v1/" e "/api/" —
+	// o ServeMux os prioriza sem conflito.
+	modelsHandler := s.AuthMiddleware(http.HandlerFunc(s.handleListModels))
+	mux.Handle("GET /v1/models", modelsHandler)
+	mux.Handle("GET /api/models", modelsHandler)
+
 	// /v1/* e /api/* com middleware de auth (DB hit por request).
 	// Ambos os prefixos são aceitos: /v1 (SDKs OpenAI) e /api (coding tools).
 	// O forwarder (stripProxyPrefix) descarta o prefixo antes de montar a URL
@@ -222,9 +233,8 @@ func (s *Server) handleV1(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Endpoints sem body (ex.: GET /v1/models): repassa sem parse de model.
-	// Para estes, "model" é derivado do path. Por ora, exigimos body JSON para
-	// endpoints de chat/completions. F5 tratará /v1/models sem model.
+	// Endpoints sem body: GET /v1/models tem rota própria (RF-12, mais
+	// específica no mux). Demais endpoints exigem body JSON com "model".
 	if len(bodyBytes) == 0 {
 		observability.IncProxyRequest("", "", http.StatusBadRequest)
 		writeBadRequest(w, "request body is required")
