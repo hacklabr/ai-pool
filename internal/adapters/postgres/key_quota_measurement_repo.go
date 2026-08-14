@@ -98,3 +98,38 @@ func (r *KeyQuotaMeasurementRepo) ListByKey(ctx context.Context, orgID int64, ke
 	}
 	return out, rows.Err()
 }
+
+// MinTokensByLayer retorna, para cada chave do conjunto, o piso conservador
+// de cota por camada (MIN(tokens)) — o denominador CALIBRADO do painel
+// (issue #20, RF-05). Só as camadas de ciclo exibidas no painel
+// (weekly/monthly); window_5h/balance/tier/other não são denominador
+// de ciclo. UMA query para todas as chaves (key_id = ANY($2), sem N+1).
+// Chaves sem medições não aparecem no mapa.
+func (r *KeyQuotaMeasurementRepo) MinTokensByLayer(ctx context.Context, orgID int64, keyIDs []int64) (map[int64]map[string]int64, error) {
+	out := make(map[int64]map[string]int64, len(keyIDs))
+	if len(keyIDs) == 0 {
+		return out, nil
+	}
+	const q = `SELECT key_id, limit_layer, MIN(tokens)
+	FROM key_quota_measurements
+	WHERE organization_id = $1 AND key_id = ANY($2) AND limit_layer IN ('weekly','monthly')
+	GROUP BY key_id, limit_layer`
+	rows, err := r.pool.Query(ctx, q, orgID, keyIDs)
+	if err != nil {
+		return nil, fmt.Errorf("KeyQuotaMeasurementRepo.MinTokensByLayer: %w", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var keyID int64
+		var layer string
+		var min int64
+		if err := rows.Scan(&keyID, &layer, &min); err != nil {
+			return nil, fmt.Errorf("KeyQuotaMeasurementRepo.MinTokensByLayer scan: %w", err)
+		}
+		if out[keyID] == nil {
+			out[keyID] = map[string]int64{}
+		}
+		out[keyID][layer] = min
+	}
+	return out, rows.Err()
+}

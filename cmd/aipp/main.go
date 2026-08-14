@@ -156,6 +156,8 @@ func main() {
 	if pool != nil {
 		sessionStore = store.NewSessionStore()
 		adminApp = admin.NewApp(pool, sessionStore, pepper, cfg.DevMode, cfg.PublicURL)
+		// Thresholds de subutilização (issue #20, RF-04) a partir da config.
+		adminApp.SetUnderutilizationThresholds(cfg.UnderutilizationThresholdPct, cfg.UnderutilizationDaysBeforeReset)
 		go startSessionCleanup(sessionStore, 10*time.Minute, logger)
 	} else {
 		// Stub admin que responde 503 para tudo (precisa DB).
@@ -747,6 +749,10 @@ func buildRoutingEngine(cfg *config.Config, logger *slog.Logger, pool *pgxpool.P
 	// reativação (scheduler + lazy) gravam eventos append-only no audit_log.
 	transitionAuditor := postgres.NewKeyTransitionAuditorAdapter(postgres.NewAuditRepo(pool))
 	autoDisable.SetTransitionAuditor(transitionAuditor)
+	// Calibração empírica de cota (issue #20, RF-05): desativações por teto
+	// de janela do plano registram a soma de tokens da janela como medição
+	// observada (best-effort — nunca derruba o disable).
+	autoDisable.SetQuotaMeasurementRecorder(postgres.NewQuotaCalibrationAdapter(pool))
 
 	// Engine deps adapter (ModelRepo + KeyRepo).
 	modelRepo := postgres.NewModelRepo(pool)

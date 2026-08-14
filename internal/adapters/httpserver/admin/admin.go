@@ -69,6 +69,13 @@ type App struct {
 	// invitationRepo e modelRepo são usados para convites de usuários.
 	invitationRepo *postgres.InvitationRepo
 	modelRepo      *postgres.ModelRepo
+	// quotaMeasurementRepo lê as medições empíricas de cota (issue #20,
+	// RF-05) para o denominador calibrado na página de chaves.
+	quotaMeasurementRepo *postgres.KeyQuotaMeasurementRepo
+	// Thresholds de subutilização (issue #20, RF-04) — defaults 30%/2 dias;
+	// injetados via SetUnderutilizationThresholds a partir da config.
+	underutilizationThresholdPct float64
+	underutilizationDays         int
 }
 
 // cookieConfig parametriza flags dos cookies de sessão/CSRF.
@@ -121,8 +128,23 @@ func NewApp(
 		publicURL:      strings.TrimRight(publicURL, "/"),
 		invitationRepo: postgres.NewInvitationRepo(pool),
 		modelRepo:      postgres.NewModelRepo(pool),
+		// Defaults de subutilização (RF-04); override via setter com a config.
+		quotaMeasurementRepo:         postgres.NewKeyQuotaMeasurementRepo(pool),
+		underutilizationThresholdPct: 30,
+		underutilizationDays:         2,
 	}
 	return a
+}
+
+// SetUnderutilizationThresholds injeta os thresholds de subutilização
+// (issue #20, RF-04) a partir da config (AIPP_UNDERUTILIZATION_*).
+func (a *App) SetUnderutilizationThresholds(pct float64, days int) {
+	if pct > 0 && pct <= 100 {
+		a.underutilizationThresholdPct = pct
+	}
+	if days >= 0 {
+		a.underutilizationDays = days
+	}
 }
 
 // SetRateLimiter injeta o rate limiter (F6) para proteção brute-force do login.

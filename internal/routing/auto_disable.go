@@ -81,6 +81,9 @@ type AutoDisableManager struct {
 	now      func() time.Time
 	// auditor registra transições no audit_log (issue #19, RF-03). nil-safe.
 	auditor KeyTransitionAuditor
+	// quotaRecorder registra medições empíricas de cota nas desativações por
+	// teto (issue #20, RF-05). nil-safe; best-effort.
+	quotaRecorder QuotaMeasurementRecorder
 
 	mu     sync.RWMutex
 	states map[keyStateKey]*keyState
@@ -124,6 +127,13 @@ func NewAutoDisableManager(
 // (nil-safe): sem auditor, as transições não geram eventos de audit_log.
 func (m *AutoDisableManager) SetTransitionAuditor(a KeyTransitionAuditor) {
 	m.auditor = a
+}
+
+// SetQuotaMeasurementRecorder injeta o gravador de medições empíricas de
+// cota (issue #20, RF-05). Opcional (nil-safe): sem recorder, as
+// desativações por teto não calibram o denominador.
+func (m *AutoDisableManager) SetQuotaMeasurementRecorder(r QuotaMeasurementRecorder) {
+	m.quotaRecorder = r
 }
 
 // RecordError registra um erro para a chave e dispara auto-disable se atingir
@@ -232,7 +242,7 @@ func (m *AutoDisableManager) RecordError(
 		// Auditoria da transição (issue #19, RF-03): camada do limite +
 		// mensagem upstream sanitizada. Best-effort — falha não derruba a
 		// transição já persistida.
-		m.auditAutoDisable(ctx, orgID, keyID, providerSlug, statusCode, errBody, reason, disabledUntil)
+		m.auditAutoDisable(ctx, orgID, keyID, providerSlug, statusCode, errBody, reason, disabledUntil, now)
 	}
 
 	// 3. Notifica LRUStore (remove das candidatas).
@@ -253,6 +263,9 @@ func (m *AutoDisableManager) RecordError(
 // auditAutoDisable registra o evento de auto-disable no audit_log com a
 // camada do limite (ClassifyLimitLayer) e a mensagem upstream sanitizada
 // (SanitizeUpstreamMessage — nunca a chave de API). Best-effort.
+//
+// Também dispara a calibração empírica da cota (issue #20, RF-05) quando a
+// camada é um teto de janela do plano (window_5h/weekly/monthly).
 func (m *AutoDisableManager) auditAutoDisable(
 	ctx context.Context,
 	orgID domain.OrganizationID,
@@ -262,22 +275,50 @@ func (m *AutoDisableManager) auditAutoDisable(
 	errBody []byte,
 	reason domain.KeyDisabledReason,
 	disabledUntil time.Time,
+	now time.Time,
 ) {
-	if m.auditor == nil {
+	layer, _ := ClassifyLimitLayer(providerSlug, statusCode, string(errBody))
+	if m.auditor != nil {
+		meta := map[string]any{
+			"reason":         string(reason),
+			"disabled_until": disabledUntil.UTC().Format(time.RFC3339),
+			"limit_layer":    layer,
+			"status_code":    statusCode,
+			"provider_slug":  providerSlug,
+			"error_message":  SanitizeUpstreamMessage(errBody),
+			"trigger":        "auto_disable",
+		}
+		if err := m.auditor.AppendKeyTransition(ctx, orgID, keyID, AuditActionAutoDisable, meta); err != nil {
+			m.logger.Warn("auto-disable: audit append failed", "key_id", keyID, "err", err)
+		}
+	}
+	// Calibração empírica (issue #20, RF-05): teto de janela do plano →
+	// registra a soma de tokens da janela como medição observada.
+	// Best-effort — falha NUNCA afeta o disable/audit já persistidos.
+	switch layer {
+	case LimitLayerWindow5h, LimitLayerWeekly, LimitLayerMonthly:
+		m.recordQuotaMeasurement(ctx, orgID, keyID, layer, now, SanitizeUpstreamMessage(errBody))
+	}
+}
+
+// recordQuotaMeasurement delega a medição ao recorder (nil-safe). Falha só
+// gera warn no log estruturado — a calibração é best-effort por design.
+func (m *AutoDisableManager) recordQuotaMeasurement(
+	ctx context.Context,
+	orgID domain.OrganizationID,
+	keyID domain.ID,
+	layer string,
+	disabledAt time.Time,
+	sanitizedMessage string,
+) {
+	if m.quotaRecorder == nil {
 		return
 	}
-	layer, _ := ClassifyLimitLayer(providerSlug, statusCode, string(errBody))
-	meta := map[string]any{
-		"reason":         string(reason),
-		"disabled_until": disabledUntil.UTC().Format(time.RFC3339),
-		"limit_layer":    layer,
-		"status_code":    statusCode,
-		"provider_slug":  providerSlug,
-		"error_message":  SanitizeUpstreamMessage(errBody),
-		"trigger":        "auto_disable",
-	}
-	if err := m.auditor.AppendKeyTransition(ctx, orgID, keyID, AuditActionAutoDisable, meta); err != nil {
-		m.logger.Warn("auto-disable: audit append failed", "key_id", keyID, "err", err)
+	if err := m.quotaRecorder.RecordCeilingHit(ctx, orgID, keyID, layer, disabledAt, sanitizedMessage); err != nil {
+		m.logger.Warn("auto-disable: quota measurement record failed",
+			"key_id", keyID,
+			"limit_layer", layer,
+			"err", err)
 	}
 }
 

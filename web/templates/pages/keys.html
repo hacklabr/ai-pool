@@ -51,6 +51,16 @@
             {{if $k.PlanName}}
               <div class="c-key-row__meta">plano: <strong>{{$k.PlanName}}</strong>{{if $k.PlanRenewalDate}} · renova em {{$k.PlanRenewalDate}}{{end}}</div>
             {{end}}
+            {{/* Uso do plano por ciclo (issue #20, RF-02/RF-04) */}}
+            {{if $k.PlanRenewalDate}}{{$p := index $c.PlanUsage $k.ID}}{{if $p.PlanConfigured}}
+              <div class="c-key-row__meta">
+                uso do plano:
+                semanal {{if $p.WeeklyPctText}}<strong>{{$p.WeeklyPctText}}</strong> <span class="u-text-muted">({{$p.WeeklyConfidenceText}})</span> · {{fmtNumber $p.WeeklyTokens}} tokens · fim {{fmtTime $p.WeeklyEnd}}{{else}}<span class="u-text-muted">sem cota</span>{{end}}
+                 ·
+                mensal {{if $p.MonthlyPctText}}<strong>{{$p.MonthlyPctText}}</strong> <span class="u-text-muted">({{$p.MonthlyConfidenceText}})</span> · {{fmtNumber $p.MonthlyTokens}} tokens · fim {{fmtTime $p.MonthlyEnd}} ({{fmtTimeUntil $p.MonthlyEnd}}){{else}}<span class="u-text-muted">cadastre a cota do plano</span>{{end}}
+                {{if $p.Underutilized}}<span class="c-status-badge c-status-badge--warning">subutilizada</span>{{end}}
+              </div>
+            {{end}}{{end}}
             {{if eq $k.Status "auto_disabled"}}
               {{if $k.DisabledUntil}}
                 <div class="c-key-row__meta">↻ reativação em <strong>{{fmtTimeUntil $k.DisabledUntil}}</strong> ({{fmtTime $k.DisabledUntil}})</div>

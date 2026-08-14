@@ -81,6 +81,12 @@ type Config struct {
 	// (o CLI --sync-models continua disponível).
 	ModelSyncInterval time.Duration
 
+	// Subutilização de chaves (issue #20, RF-04): uma chave com plano é
+	// "subutilizada" quando o ciclo mensal está acabando E o uso ficou
+	// abaixo do threshold. Usados pela página de chaves do admin.
+	UnderutilizationThresholdPct    float64 // AIPP_UNDERUTILIZATION_THRESHOLD_PCT (default 30)
+	UnderutilizationDaysBeforeReset int     // AIPP_UNDERUTILIZATION_DAYS_BEFORE_RESET (default 2)
+
 	// Organização default (multi-tenant ready)
 	DefaultOrgID int64
 
@@ -136,6 +142,9 @@ func Load() (*Config, error) {
 		// Go duration ("6h", "30m"); "0" desativa o job periódico.
 		ModelSyncInterval: getduration("AIPP_MODEL_SYNC_INTERVAL", 6*time.Hour),
 
+		UnderutilizationThresholdPct:    getenvFloat64("AIPP_UNDERUTILIZATION_THRESHOLD_PCT", 30),
+		UnderutilizationDaysBeforeReset: getenvInt("AIPP_UNDERUTILIZATION_DAYS_BEFORE_RESET", 2),
+
 		DefaultOrgID: getenvInt64("DEFAULT_ORG_ID", 1),
 
 		EnableMetrics: getbool("ENABLE_METRICS", false),
@@ -176,6 +185,14 @@ func (c *Config) Validate() error {
 	}
 	if c.LogFormat != "json" && c.LogFormat != "text" {
 		return errors.New("config: LOG_FORMAT must be json|text")
+	}
+	// Thresholds de subutilização (RF-04): pct em (0,100]; dias >= 0
+	// (0 = só marca na virada exata do ciclo).
+	if c.UnderutilizationThresholdPct <= 0 || c.UnderutilizationThresholdPct > 100 {
+		return errors.New("config: AIPP_UNDERUTILIZATION_THRESHOLD_PCT must be in (0,100]")
+	}
+	if c.UnderutilizationDaysBeforeReset < 0 {
+		return errors.New("config: AIPP_UNDERUTILIZATION_DAYS_BEFORE_RESET must be >= 0")
 	}
 	return nil
 }
@@ -240,6 +257,16 @@ func getenvInt64(key string, def int64) int64 {
 	if v, ok := os.LookupEnv(key); ok && v != "" {
 		if n, err := strconv.ParseInt(v, 10, 64); err == nil {
 			return n
+		}
+	}
+	return def
+}
+
+// getenvFloat64 lê um float64 de env var com default.
+func getenvFloat64(key string, def float64) float64 {
+	if v, ok := os.LookupEnv(key); ok && v != "" {
+		if f, err := strconv.ParseFloat(v, 64); err == nil {
+			return f
 		}
 	}
 	return def
