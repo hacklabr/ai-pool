@@ -14,6 +14,14 @@
     <button class="c-button" @click="$dispatch('open-modal', {id: 'modal-new-key'})">
       + Nova chave
     </button>
+    <button class="c-button c-button--ghost"
+            hx-post="/api/web/admin/keys/test-all"
+            hx-headers='{"X-CSRF-Token": "{{$.CSRFToken}}"}'
+            hx-confirm="Testar TODAS as chaves? Será feito um /chat/completions (max_tokens=1) por chave. Chaves com falha de auth ou sem cota serão DESATIVADAS."
+            hx-disabled-elt="this"
+            hx-on::after-request="if(event.detail.successful){alert('Teste concluído. A página será recarregada.');location.reload()}else{const s=event.detail.xhr.status;alert('Falha no teste em lote (HTTP '+s+')')}">
+      Testar todas
+    </button>
   </div>
 
   {{/* Legenda dos 4 estados visuais */}}
@@ -55,6 +63,14 @@
             <span class="c-status-badge {{keyStatusClass $k.Status}}">{{keyStatusLabel $k.Status}}</span>
           </div>
           <div class="c-key-row__actions">
+            <button class="c-button c-button--ghost c-button--sm"
+                    hx-post="/api/web/admin/keys/{{$k.ID}}/test"
+                    hx-headers='{"X-CSRF-Token": "{{$.CSRFToken}}"}'
+                    hx-confirm="Testar chave '{{$k.Label}}'? Será feito um /chat/completions (max_tokens=1) e o status atualizado conforme a resposta."
+                    hx-disabled-elt="this"
+                    hx-on::after-request="if(event.detail.successful){try{const d=JSON.parse(event.detail.xhr.responseText);alert(d.message||'Teste concluído.');location.reload()}catch(e){alert('Teste concluído.');location.reload()}}else{const s=event.detail.xhr.status;alert('Falha no teste (HTTP '+s+')')}">
+              Testar
+            </button>
             {{if eq $k.Status "enabled"}}
               <button class="c-button c-button--ghost c-button--sm"
                       hx-post="/api/web/admin/keys/{{$k.ID}}/force-disable"

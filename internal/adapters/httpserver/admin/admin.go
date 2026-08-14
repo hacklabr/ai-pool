@@ -59,6 +59,13 @@ type App struct {
 	// encryptor (F7) — cifra valores de chaves de provedores ao criar.
 	// Em DEV_MODE pode ser nil (usa plaintext direto); em prod é AESGCMCrypto.
 	encryptor domain.KeyEncryptor
+	// decryptor — decifra valores de chaves para o "teste de chave" (POST /keys/{id}/test).
+	// Reaproveita o mesmo KeyDecryptor do routing engine (AESGCMCrypto em prod,
+	// IdentityDecryptor em DEV). nil-safe: handlers de teste respondem 503 se nil.
+	decryptor domain.KeyDecryptor
+	// upstreamClient — http.Client para chamadas aos provedores no teste de chave.
+	// Compartilhado com o proxy.NewUpstreamClient (connection pooling). nil-safe.
+	upstreamClient *http.Client
 	// invitationRepo e modelRepo são usados para convites de usuários.
 	invitationRepo *postgres.InvitationRepo
 	modelRepo      *postgres.ModelRepo
@@ -126,6 +133,19 @@ func (a *App) SetRateLimiter(rl domain.RateLimiter) {
 // SetEncryptor injeta o cifrador (F7) para envelope encryption de chaves.
 func (a *App) SetEncryptor(enc domain.KeyEncryptor) {
 	a.encryptor = enc
+}
+
+// SetDecryptor injeta o decifrador usado no teste de chaves (POST /keys/{id}/test
+// e /keys/test-all). Em DEV_MODE pode ser nil — handlers de teste respondem 503.
+// Reaproveita o mesmo decryptor do routing engine (AESGCMCrypto em prod).
+func (a *App) SetDecryptor(dec domain.KeyDecryptor) {
+	a.decryptor = dec
+}
+
+// SetUpstreamClient injeta o http.Client para chamadas aos provedores no teste
+// de chaves. Tipicamente o mesmo *http.Client do proxy.NewUpstreamClient.
+func (a *App) SetUpstreamClient(c *http.Client) {
+	a.upstreamClient = c
 }
 
 // SetTemplates injeta o renderizador de templates HTML (F8). Sem isto, os
@@ -269,6 +289,10 @@ func (a *App) Handler() http.Handler {
 	adminGrp.HandleFunc("DELETE /api/web/admin/keys/{id}", a.handleAdminDeleteKey)
 	adminGrp.HandleFunc("POST /api/web/admin/keys/{id}/force-disable", a.handleAdminForceDisableKey)
 	adminGrp.HandleFunc("POST /api/web/admin/keys/{id}/force-enable", a.handleAdminForceEnableKey)
+	// Teste de chaves: chama o provedor com /chat/completions (max_tokens=1)
+	// e atualiza o status da chave conforme a resposta (enabled/auto_disabled).
+	adminGrp.HandleFunc("POST /api/web/admin/keys/{id}/test", a.handleAdminTestKey)
+	adminGrp.HandleFunc("POST /api/web/admin/keys/test-all", a.handleAdminTestAllKeys)
 	adminGrp.HandleFunc("GET /api/web/admin/tokens", a.handleAdminListTokens)
 	adminGrp.HandleFunc("POST /api/web/admin/tokens/{id}/revoke", a.handleAdminRevokeToken)
 	adminGrp.HandleFunc("DELETE /api/web/admin/tokens/{id}", a.handleAdminDeleteToken)

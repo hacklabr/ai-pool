@@ -235,6 +235,11 @@ func main() {
 		adminApp.SetRateLimiter(rateLimiter)
 		// F7: injeta encryptor no admin (cifra chaves ao criar).
 		adminApp.SetEncryptor(buildEncryptor(cfg, logger))
+		// Teste de chaves (POST /api/web/admin/keys/{id}/test): reusa o mesmo
+		// KeyDecryptor do routing engine e o mesmo http.Client do proxy.
+		// Em DEV sem KEK_PATH, decryptor é IdentityDecryptor (plaintext no DB).
+		adminApp.SetDecryptor(buildDecryptor(cfg, logger))
+		adminApp.SetUpstreamClient(upstreamClient)
 		// F8: injeta templates HTML (embed.FS do pacote web) e estáticos.
 		// Em caso de erro de parse, loga mas NÃO derruba o startup — handlers
 		// HTML respondem 503 graceful (App continua funcional para a API JSON).

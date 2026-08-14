@@ -258,6 +258,74 @@ func (r *KeyRepo) Reactivate(ctx context.Context, orgID domain.OrganizationID, k
 	return nil
 }
 
+// ApplyTestStatus aplica o resultado de um "teste manual" de chave (POST
+// /api/web/admin/keys/{id}/test). Diferente de TransitionToAutoDisabled, NÃO
+// filtra por status anterior — o teste é autoritativo: qualquer chave (mesmo
+// manual_disabled) pode ser desativada por quota/auth ao ser testada.
+//
+// Quando ok=true: status=enabled, reseta error_count+consecutive_errors e limpa
+// reason/disabled_at/disabled_until. Quando ok=false: status=auto_disabled e
+// disabled_reason/disabled_until/last_error_hint são preenchidos.
+//
+// NÃO bloqueia chave manual_disabled em caso de sucesso (a semântica é "se a
+// chave está funcionando, ative-a"). Caso o admin queira manter manual_disabled,
+// não deve usar o botão Testar nesta chave.
+//
+// Idempotente: re-chamar com mesmo resultado não causa efeito colateral.
+// Retorna ErrNotFound se a chave não existe na org.
+func (r *KeyRepo) ApplyTestStatus(
+	ctx context.Context,
+	orgID domain.OrganizationID,
+	keyID domain.ID,
+	ok bool,
+	reason domain.KeyDisabledReason,
+	disabledUntil *time.Time,
+	lastErrorHint *string,
+) error {
+	var q string
+	var args []any
+	if ok {
+		q = `
+			UPDATE provider_keys
+			SET status = 'enabled',
+			    disabled_reason = NULL,
+			    disabled_at = NULL,
+			    disabled_until = NULL,
+			    last_error_at = NULL,
+			    last_error_hint = NULL,
+			    error_count = 0,
+			    consecutive_errors = 0,
+			    updated_at = now()
+			WHERE organization_id = $1 AND id = $2`
+		args = []any{int64(orgID), int64(keyID)}
+	} else {
+		q = `
+			UPDATE provider_keys
+			SET status = 'auto_disabled',
+			    disabled_reason = $3,
+			    disabled_at = now(),
+			    disabled_until = $4,
+			    last_error_at = now(),
+			    last_error_hint = $5,
+			    updated_at = now()
+			WHERE organization_id = $1 AND id = $2`
+		args = []any{
+			int64(orgID), int64(keyID),
+			string(reason),
+			ptrToTimestamptz(disabledUntil),
+			ptrToText(lastErrorHint),
+		}
+	}
+	tag, err := r.pool.Exec(ctx, q, args...)
+	if err != nil {
+		return fmt.Errorf("KeyRepo.ApplyTestStatus: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
 // ReactivateExpiredKeys faz UPDATE atômico + RETURNING das chaves
 // 'auto_disabled' cujo disabled_until <= now, marcando-as como 'enabled'.
 //
