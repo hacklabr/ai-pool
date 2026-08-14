@@ -137,8 +137,14 @@ type ProviderKey struct {
 	LastErrorHint     *string // data extraída do parse (liberação de cota)
 	LastUsedAt        *time.Time
 	UserAgentOverride *string
-	CreatedAt         time.Time
-	UpdatedAt         time.Time
+	// Campos de plano (issue #19, RF-01): chaves de assinatura (Z.ai Coding
+	// Plan, Kimi Code) têm ciclo com cotas em janelas ancoradas na renovação.
+	// Nullable — chaves pay-as-you-go não têm ciclo de plano.
+	PlanName        *string    // ex.: "GLM Coding Lite"
+	PlanRenewalDate *time.Time // DATE no DB (âncora do ciclo semanal/mensal)
+	PlanQuotaTokens *int64     // denominador configurado pelo admin (tokens/ciclo)
+	CreatedAt       time.Time
+	UpdatedAt       time.Time
 }
 
 // KeyStatus reflete a máquina de estados da chave (spec §3.2.4).

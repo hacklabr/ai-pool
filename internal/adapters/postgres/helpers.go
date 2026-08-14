@@ -90,3 +90,29 @@ func ptrToTimestamptz(t *time.Time) pgtype.Timestamptz {
 	}
 	return pgtype.Timestamptz{Time: *t, Valid: true}
 }
+
+// ptrToInt8 converte *int64 para pgtype.Int8 (Valid=false se nil).
+func ptrToInt8(v *int64) pgtype.Int8 {
+	if v == nil {
+		return pgtype.Int8{Valid: false}
+	}
+	return pgtype.Int8{Int64: *v, Valid: true}
+}
+
+// ptrToDate converte *time.Time (apenas a parte de data é usada) para
+// pgtype.Date — colunas DATE (ex.: provider_keys.plan_renewal_date).
+func ptrToDate(t *time.Time) pgtype.Date {
+	if t == nil {
+		return pgtype.Date{Valid: false}
+	}
+	return pgtype.Date{Time: *t, Valid: true}
+}
+
+// dateToPtr converte pgtype.Date para *time.Time (nil se NULL).
+func dateToPtr(d pgtype.Date) *time.Time {
+	if !d.Valid {
+		return nil
+	}
+	v := d.Time
+	return &v
+}

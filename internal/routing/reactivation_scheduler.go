@@ -45,6 +45,8 @@ type ReactivationScheduler struct {
 	interval time.Duration
 	limit    int
 	logger   *slog.Logger
+	// auditor registra reativações no audit_log (issue #19, RF-03). nil-safe.
+	auditor KeyTransitionAuditor
 }
 
 // NewReactivationScheduler cria o scheduler.
@@ -66,6 +68,12 @@ func NewReactivationScheduler(
 		limit:    50,
 		logger:   logger,
 	}
+}
+
+// SetTransitionAuditor injeta o auditor de transições (issue #19). Opcional
+// (nil-safe): sem auditor, as reativações não geram eventos de audit_log.
+func (s *ReactivationScheduler) SetTransitionAuditor(a KeyTransitionAuditor) {
+	s.auditor = a
 }
 
 // Start inicia a goroutine de reativação. Retorna imediatamente; roda até
@@ -117,6 +125,13 @@ func (s *ReactivationScheduler) runOnce(ctx context.Context) (int, error) {
 		// Notifica LRUStore que a chave voltou ao pool.
 		if s.lru != nil {
 			_ = s.lru.OnKeyReenabled(ctx, c.KeyID, c.ProviderID)
+		}
+		// Auditoria da reativação (issue #19, RF-03). Best-effort.
+		if s.auditor != nil {
+			if err := s.auditor.AppendKeyTransition(ctx, s.orgID, c.KeyID, AuditActionReactivate,
+				map[string]any{"source": "scheduler"}); err != nil {
+				s.logger.Warn("reactivation: audit append failed", "key_id", c.KeyID, "err", err)
+			}
 		}
 		// Métrica Prometheus (F11): uma reativação = um inc.
 		observability.IncKeyReactivation()

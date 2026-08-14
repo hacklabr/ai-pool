@@ -18,9 +18,10 @@ import (
 
 // Compile-time assertions: garantem que os structs satisfazem as interfaces.
 var (
-	_ routing.EngineDeps    = (*EngineDepsAdapter)(nil)
-	_ routing.SchedulerDeps = (*SchedulerDepsAdapter)(nil)
-	_ routing.KeyRepoPort   = (*KeyRepo)(nil)
+	_ routing.EngineDeps           = (*EngineDepsAdapter)(nil)
+	_ routing.SchedulerDeps        = (*SchedulerDepsAdapter)(nil)
+	_ routing.KeyRepoPort          = (*KeyRepo)(nil)
+	_ routing.KeyTransitionAuditor = (*KeyTransitionAuditorAdapter)(nil)
 )
 
 // EngineDepsAdapter adapta ModelRepo + KeyRepo para routing.EngineDeps.
@@ -85,4 +86,36 @@ func (a *SchedulerDepsAdapter) ListToReactivate(ctx context.Context, orgID domai
 // Reactivate delega para KeyRepo.
 func (a *SchedulerDepsAdapter) Reactivate(ctx context.Context, orgID domain.OrganizationID, keyID domain.ID) error {
 	return a.KeyRepo.Reactivate(ctx, orgID, keyID)
+}
+
+// KeyTransitionAuditorAdapter adapta AuditRepo para a porta
+// routing.KeyTransitionAuditor (issue #19, RF-03: auditoria de transições de
+// chave com entity_type='provider_key'). Append-only — ver AuditRepo.
+type KeyTransitionAuditorAdapter struct {
+	AuditRepo *AuditRepo
+}
+
+// NewKeyTransitionAuditorAdapter monta o adapter.
+func NewKeyTransitionAuditorAdapter(auditRepo *AuditRepo) *KeyTransitionAuditorAdapter {
+	return &KeyTransitionAuditorAdapter{AuditRepo: auditRepo}
+}
+
+// AppendKeyTransition implementa routing.KeyTransitionAuditor.
+// ActorUserID é nil — transições do routing engine são ações do sistema
+// (ações de admin carregam o ator nos handlers do pacote admin).
+func (a *KeyTransitionAuditorAdapter) AppendKeyTransition(
+	ctx context.Context,
+	orgID domain.OrganizationID,
+	keyID domain.ID,
+	action string,
+	metadata any,
+) error {
+	kid := int64(keyID)
+	return a.AuditRepo.Append(ctx, AuditEntry{
+		OrganizationID: int64(orgID),
+		Action:         action,
+		EntityType:     "provider_key",
+		EntityID:       &kid,
+		Metadata:       metadata,
+	})
 }

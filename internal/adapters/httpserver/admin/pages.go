@@ -356,7 +356,9 @@ func (a *App) handlePageAdminKeys(w http.ResponseWriter, r *http.Request) {
 	// Carrega chaves (flat list; agrupamento visual no template).
 	rows, err := a.pool.Query(r.Context(), `
 		SELECT id, provider_id, label, status, disabled_reason, disabled_until,
-		       error_count, last_used_at, user_agent_override, created_at
+		       error_count, last_used_at, user_agent_override,
+		       plan_name, TO_CHAR(plan_renewal_date, 'YYYY-MM-DD'), plan_quota_tokens,
+		       created_at
 		FROM provider_keys
 		WHERE organization_id = $1
 		ORDER BY provider_id, label`, sess.OrgID)
@@ -364,11 +366,16 @@ func (a *App) handlePageAdminKeys(w http.ResponseWriter, r *http.Request) {
 		defer rows.Close()
 		for rows.Next() {
 			var k keyListItem
-			var disabledReason, uaOverride *string
+			var disabledReason, uaOverride, planName, planRenewal *string
+			var planQuota *int64
 			if err := rows.Scan(&k.ID, &k.ProviderID, &k.Label, &k.Status, &disabledReason,
-				&k.DisabledUntil, &k.ErrorCount, &k.LastUsedAt, &uaOverride, &k.CreatedAt); err == nil {
+				&k.DisabledUntil, &k.ErrorCount, &k.LastUsedAt, &uaOverride,
+				&planName, &planRenewal, &planQuota, &k.CreatedAt); err == nil {
 				k.DisabledReason = disabledReason
 				k.UserAgentOverride = uaOverride
+				k.PlanName = planName
+				k.PlanRenewalDate = planRenewal
+				k.PlanQuotaTokens = planQuota
 				content.Keys = append(content.Keys, k)
 			}
 		}

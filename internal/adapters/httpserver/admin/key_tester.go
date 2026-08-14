@@ -17,6 +17,7 @@ import (
 
 	"github.com/hacklabr/ai-pool/internal/adapters/postgres"
 	"github.com/hacklabr/ai-pool/internal/domain"
+	"github.com/hacklabr/ai-pool/internal/routing"
 )
 
 // =============================================================================
@@ -86,9 +87,6 @@ const testAllConcurrency = 5
 // completo do routing engine, que tem mais formatos).
 var reRetryAfterInline = regexp.MustCompile(`(?i)retry[-_ ]?after["']?\s*[:=]\s*"?(\d+)`)
 
-// reNewlineCollapse collapse whitespace em mensagens de erro do provedor.
-var reNewlineCollapse = regexp.MustCompile(`\s+`)
-
 // handleAdminTestKey testa UMA chave e atualiza seu status.
 //
 // Rotas: POST /api/web/admin/keys/{id}/test.
@@ -116,7 +114,7 @@ func (a *App) handleAdminTestKey(w http.ResponseWriter, r *http.Request) {
 	}
 
 	kt := &keyTesterImpl{app: a}
-	res, err := kt.testKey(r.Context(), domain.OrganizationID(sess.OrgID), domain.ID(id))
+	res, err := kt.testKey(r.Context(), domain.OrganizationID(sess.OrgID), domain.ID(id), &sess.UserID)
 	if err != nil {
 		if errors.Is(err, postgres.ErrNotFound) {
 			writeAPIError(w, http.StatusNotFound, "not_found", "key not found")
@@ -175,7 +173,7 @@ func (a *App) handleAdminTestAllKeys(w http.ResponseWriter, r *http.Request) {
 			sem <- struct{}{}
 			defer func() { <-sem }()
 			// Cada teste roda com seu próprio sub-context (timeout individual).
-			res, err := kt.testKey(ctx, domain.OrganizationID(sess.OrgID), keyID)
+			res, err := kt.testKey(ctx, domain.OrganizationID(sess.OrgID), keyID, &sess.UserID)
 			if err != nil || res == nil {
 				results[idx] = TestResult{
 					KeyID:   int64(keyID),
@@ -207,8 +205,10 @@ func (a *App) handleAdminTestAllKeys(w http.ResponseWriter, r *http.Request) {
 }
 
 // testKey executa um teste individual e persiste o novo status.
+// actorUserID identifica o admin que disparou o teste (auditoria, issue #19);
+// pode ser nil (ação de sistema).
 // Retorna ErrNotFound (postgres) se a chave não existe na org.
-func (kt *keyTesterImpl) testKey(ctx context.Context, orgID domain.OrganizationID, keyID domain.ID) (*TestResult, error) {
+func (kt *keyTesterImpl) testKey(ctx context.Context, orgID domain.OrganizationID, keyID domain.ID, actorUserID *int64) (*TestResult, error) {
 	app := kt.app
 
 	// 1. Carrega chave.
@@ -334,6 +334,9 @@ func (kt *keyTesterImpl) testKey(ctx context.Context, orgID domain.OrganizationI
 			result.Message = "OK do provedor mas erro ao atualizar status: " + err.Error()
 			return &result, nil
 		}
+		// Auditoria da transição (issue #19, RF-03). Best-effort.
+		kt.auditTestTransition(ctx, orgID, k.ID, actorUserID, "provider_key.test_enable",
+			resp.StatusCode, "", "", latency)
 		result.OK = true
 		result.NewStatus = string(domain.KeyStatusEnabled)
 		result.Message = fmt.Sprintf("OK · %dms", latency.Milliseconds())
@@ -345,6 +348,11 @@ func (kt *keyTesterImpl) testKey(ctx context.Context, orgID domain.OrganizationI
 			result.Message = "Falha do provedor mas erro ao atualizar status: " + err.Error()
 			return &result, nil
 		}
+		// Auditoria da transição com a camada do limite + mensagem upstream
+		// sanitizada (issue #19, RF-03). Best-effort.
+		layer, _ := routing.ClassifyLimitLayer(providerSlug, resp.StatusCode, string(respBody))
+		kt.auditTestTransition(ctx, orgID, k.ID, actorUserID, "provider_key.test_disable",
+			resp.StatusCode, layer, hint, latency)
 		result.OK = false
 		result.NewStatus = string(domain.KeyStatusAutoDisabled)
 		result.Message = formatDisabledMessage(resp.StatusCode, reason, disabledUntil, latency)
@@ -359,6 +367,46 @@ func (kt *keyTesterImpl) testKey(ctx context.Context, orgID domain.OrganizationI
 		"new_status", result.NewStatus,
 	)
 	return &result, nil
+}
+
+// auditTestTransition registra a transição aplicada pelo teste de chave no
+// audit_log (issue #19, RF-03). Best-effort: falhas são silenciosas — a
+// auditoria não pode derrubar o teste já persistido. errorMessage DEVE vir
+// sanitizado (sanitizeHint/SanitizeUpstreamMessage) — nunca contém a chave.
+func (kt *keyTesterImpl) auditTestTransition(
+	ctx context.Context,
+	orgID domain.OrganizationID,
+	keyID domain.ID,
+	actorUserID *int64,
+	action string,
+	statusCode int,
+	limitLayer string,
+	errorMessage string,
+	latency time.Duration,
+) {
+	app := kt.app
+	if app.auditRepo == nil {
+		return
+	}
+	kid := int64(keyID)
+	meta := map[string]any{
+		"status_code": statusCode,
+		"latency_ms":  latency.Milliseconds(),
+	}
+	if limitLayer != "" {
+		meta["limit_layer"] = limitLayer
+	}
+	if errorMessage != "" {
+		meta["error_message"] = errorMessage
+	}
+	_ = app.auditRepo.Append(ctx, postgres.AuditEntry{
+		OrganizationID: int64(orgID),
+		ActorUserID:    actorUserID,
+		Action:         action,
+		EntityType:     "provider_key",
+		EntityID:       &kid,
+		Metadata:       meta,
+	})
 }
 
 // firstActiveModelName retorna o nome do primeiro modelo ativo do provider.
@@ -451,22 +499,10 @@ func parseRetryAfter(header http.Header, body []byte) *time.Time {
 }
 
 // sanitizeHint extrai um trecho curto (≤200 chars) e sanitizado do body do
-// provedor para fins de UI/auditoria. Colapsa whitespace, remove newlines.
+// provedor para fins de UI/auditoria. Delega para o helper ÚNICO compartilhado
+// do routing (issue #19) — mesmo comportamento em todos os caminhos.
 func sanitizeHint(body []byte) string {
-	if len(body) == 0 {
-		return ""
-	}
-	s := string(body)
-	// Limita o input antes de processar (defesa DoS para bodies grandes).
-	if len(s) > 400 {
-		s = s[:400]
-	}
-	s = reNewlineCollapse.ReplaceAllString(s, " ")
-	s = strings.TrimSpace(s)
-	if len(s) > 200 {
-		s = s[:200] + "..."
-	}
-	return s
+	return routing.SanitizeUpstreamMessage(body)
 }
 
 // formatProviderMessage constroi a mensagem de erro exibida na UI para casos

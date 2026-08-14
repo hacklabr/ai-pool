@@ -48,6 +48,9 @@
             {{if $k.UserAgentOverride}}
               <div class="c-key-row__meta">UA: {{$k.UserAgentOverride}}</div>
             {{end}}
+            {{if $k.PlanName}}
+              <div class="c-key-row__meta">plano: <strong>{{$k.PlanName}}</strong>{{if $k.PlanRenewalDate}} · renova em {{$k.PlanRenewalDate}}{{end}}</div>
+            {{end}}
             {{if eq $k.Status "auto_disabled"}}
               {{if $k.DisabledUntil}}
                 <div class="c-key-row__meta">↻ reativação em <strong>{{fmtTimeUntil $k.DisabledUntil}}</strong> ({{fmtTime $k.DisabledUntil}})</div>
@@ -150,6 +153,23 @@
         <input id="new-key-ua" name="user_agent_override" type="text"
                placeholder="MyApp/1.0">
       </div>
+      {{/* Campos de plano (issue #19): nome, data de renovação e cota em tokens */}}
+      <div class="c-form-field">
+        <label for="new-key-plan-name">Plano (opcional)</label>
+        <input id="new-key-plan-name" name="plan_name" type="text" maxlength="100"
+               placeholder="GLM Coding Lite">
+        <p class="c-form-field__hint">Nome do plano da assinatura (chaves pay-as-you-go ficam em branco).</p>
+      </div>
+      <div class="c-form-field">
+        <label for="new-key-plan-renewal">Renovação do plano (opcional)</label>
+        <input id="new-key-plan-renewal" name="plan_renewal_date" type="date">
+        <p class="c-form-field__hint">Dia em que o ciclo renova — âncora do cálculo de consumo do ciclo.</p>
+      </div>
+      <div class="c-form-field">
+        <label for="new-key-plan-quota">Cota do plano em tokens (opcional)</label>
+        <input id="new-key-plan-quota" name="plan_quota_tokens" type="number" min="1" step="1"
+               placeholder="120000">
+      </div>
       <div class="c-modal__footer">
         <button type="button" class="c-button c-button--ghost" @click="$store.modals.close()">Cancelar</button>
         <button type="submit" class="c-button">Criar</button>
@@ -179,6 +199,22 @@
         <label for="edit-key-ua-{{$k.ID}}">User-Agent Override (opcional)</label>
         <input id="edit-key-ua-{{$k.ID}}" name="user_agent_override" type="text"
                value="{{if $k.UserAgentOverride}}{{$k.UserAgentOverride}}{{end}}">
+      </div>
+      {{/* Campos de plano (issue #19): vazio limpa o campo no DB */}}
+      <div class="c-form-field">
+        <label for="edit-key-plan-name-{{$k.ID}}">Plano (opcional)</label>
+        <input id="edit-key-plan-name-{{$k.ID}}" name="plan_name" type="text" maxlength="100"
+               value="{{if $k.PlanName}}{{$k.PlanName}}{{end}}">
+      </div>
+      <div class="c-form-field">
+        <label for="edit-key-plan-renewal-{{$k.ID}}">Renovação do plano (opcional)</label>
+        <input id="edit-key-plan-renewal-{{$k.ID}}" name="plan_renewal_date" type="date"
+               value="{{if $k.PlanRenewalDate}}{{$k.PlanRenewalDate}}{{end}}">
+      </div>
+      <div class="c-form-field">
+        <label for="edit-key-plan-quota-{{$k.ID}}">Cota do plano em tokens (opcional)</label>
+        <input id="edit-key-plan-quota-{{$k.ID}}" name="plan_quota_tokens" type="number" min="1" step="1"
+               value="{{if $k.PlanQuotaTokens}}{{$k.PlanQuotaTokens}}{{end}}">
       </div>
       <div class="c-modal__footer">
         <button type="button" class="c-button c-button--ghost" @click="$store.modals.close()">Cancelar</button>

@@ -272,10 +272,10 @@ func (fc *FailoverChain) Execute(
 
 		// === Instrumentação Prometheus (F11) ===
 		// Uma tentativa ao upstream = um inc em failover_attempts_total.
-		// ProviderSlug pode estar vazio (o caller/wrapper ainda não preencheu);
-		// o helper sanitiza para "unknown" — aceitável; provider real é
-		// correlacionável via proxy_requests_total (mesma request).
-		observability.IncFailoverAttempt(opts.ProviderSlug)
+		// Prefere o slug REAL do provider da resolução (issue #19, de-quebra:
+		// antes usava opts.ProviderSlug, que o wrapper passava vazio); o helper
+		// sanitiza vazio para "unknown".
+		observability.IncFailoverAttempt(attemptSlug(opts.ProviderSlug, resolution))
 
 		// 2. Monta request ao upstream com a chave selecionada.
 		req, err := opts.BuildRequest(ctx, resolution)
@@ -321,7 +321,7 @@ func (fc *FailoverChain) Execute(
 			if herr != nil {
 				// Erro durante streaming do sucesso. Se committed, terminal.
 				_ = fc.engine.OnKeyFailed(ctx, opts.OrgID, resolution.Key.ID,
-					resolution.Provider.ID, opts.ProviderSlug, statusCode, nil)
+					resolution.Provider.ID, attemptSlug(opts.ProviderSlug, resolution), statusCode, nil)
 				return FailoverResult{
 					LastOutcome: outcome, TriedKeyIDs: triedKeys, Attempts: attempts,
 					Committed: committed, Err: fmt.Errorf("handle success response: %w", herr),
@@ -367,7 +367,7 @@ func (fc *FailoverChain) Execute(
 			}
 			// Registra erro (pode disparar auto-disable).
 			_ = fc.engine.OnKeyFailed(ctx, opts.OrgID, resolution.Key.ID,
-				resolution.Provider.ID, opts.ProviderSlug, statusCode, errBody)
+				resolution.Provider.ID, attemptSlug(opts.ProviderSlug, resolution), statusCode, errBody)
 
 			triedKeys = append(triedKeys, resolution.Key.ID)
 
@@ -392,4 +392,14 @@ func (fc *FailoverChain) Execute(
 			}
 		}
 	}
+}
+
+// attemptSlug retorna o slug do provider da tentativa: prefere o slug REAL da
+// resolução (issue #19, de-quebra: permite parsing provider-aware no
+// OnKeyFailed/ClassifyLimitLayer); fallback para opts.ProviderSlug (legado).
+func attemptSlug(fallback string, resolution *domain.KeyResolution) string {
+	if resolution != nil && resolution.Provider.Slug != "" {
+		return resolution.Provider.Slug
+	}
+	return fallback
 }

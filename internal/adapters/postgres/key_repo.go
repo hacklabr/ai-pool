@@ -40,14 +40,16 @@ func (r *KeyRepo) Create(ctx context.Context, k *domain.ProviderKey) (domain.ID,
 	}
 	const q = `
 		INSERT INTO provider_keys (provider_id, organization_id, label, encrypted_value,
-		                           encryption_key_id, status, user_agent_override)
-		VALUES ($1, $2, $3, $4, COALESCE($5,'v1'), COALESCE($6,'enabled'), $7)
+		                           encryption_key_id, status, user_agent_override,
+		                           plan_name, plan_renewal_date, plan_quota_tokens)
+		VALUES ($1, $2, $3, $4, COALESCE($5,'v1'), COALESCE($6,'enabled'), $7, $8, $9, $10)
 		RETURNING id`
 	var id int64
 	err := r.pool.QueryRow(ctx, q,
 		int64(k.ProviderID), int64(k.OrgID), k.Label,
 		[]byte(k.EncryptedValue), k.EncryptionKeyID,
 		string(k.Status), ptrToText(k.UserAgentOverride),
+		ptrToText(k.PlanName), ptrToDate(k.PlanRenewalDate), ptrToInt8(k.PlanQuotaTokens),
 	).Scan(&id)
 	if err != nil {
 		return 0, fmt.Errorf("KeyRepo.Create: %w", err)
@@ -62,7 +64,8 @@ func (r *KeyRepo) GetByID(ctx context.Context, orgID domain.OrganizationID, id d
 		SELECT id, provider_id, organization_id, label, encrypted_value, encryption_key_id,
 		       status, disabled_reason, disabled_at, disabled_until, error_count,
 		       consecutive_errors, last_error_at, last_error_hint, last_used_at,
-		       user_agent_override, created_at, updated_at
+		       user_agent_override, plan_name, plan_renewal_date, plan_quota_tokens,
+		       created_at, updated_at
 		FROM provider_keys
 		WHERE organization_id = $1 AND id = $2`
 	row := r.pool.QueryRow(ctx, q, int64(orgID), int64(id))
@@ -91,7 +94,8 @@ func (r *KeyRepo) ListUsableByProvider(ctx context.Context, orgID domain.Organiz
 		SELECT id, provider_id, organization_id, label, encrypted_value, encryption_key_id,
 		       status, disabled_reason, disabled_at, disabled_until, error_count,
 		       consecutive_errors, last_error_at, last_error_hint, last_used_at,
-		       user_agent_override, created_at, updated_at
+		       user_agent_override, plan_name, plan_renewal_date, plan_quota_tokens,
+		       created_at, updated_at
 		FROM provider_keys
 		WHERE organization_id = $1 AND provider_id = $2 AND status = 'enabled'
 		ORDER BY last_used_at NULLS FIRST`
@@ -394,7 +398,8 @@ func (r *KeyRepo) ListAll(ctx context.Context, orgID domain.OrganizationID) ([]d
 		SELECT id, provider_id, organization_id, label, encrypted_value, encryption_key_id,
 		       status, disabled_reason, disabled_at, disabled_until, error_count,
 		       consecutive_errors, last_error_at, last_error_hint, last_used_at,
-		       user_agent_override, created_at, updated_at
+		       user_agent_override, plan_name, plan_renewal_date, plan_quota_tokens,
+		       created_at, updated_at
 		FROM provider_keys
 		WHERE organization_id = $1
 		ORDER BY provider_id, label`
@@ -415,14 +420,36 @@ func (r *KeyRepo) ListAll(ctx context.Context, orgID domain.OrganizationID) ([]d
 	return out, rows.Err()
 }
 
-// UpdateMetadata altera apenas rótulo e user_agent_override de uma chave.
-// O valor cifrado NÃO é alterado por este método.
-func (r *KeyRepo) UpdateMetadata(ctx context.Context, orgID domain.OrganizationID, keyID domain.ID, label string, uaOverride *string) error {
+// UpdateMetadata altera os metadados editáveis de uma chave: rótulo,
+// user_agent_override e os campos de plano (issue #19). O valor cifrado NÃO é
+// alterado por este método.
+//
+// Semântica dos campos opcionais: nil/zero significam NULL (o form admin
+// envia todos os campos; vazio → limpa o campo no DB).
+func (r *KeyRepo) UpdateMetadata(
+	ctx context.Context,
+	orgID domain.OrganizationID,
+	keyID domain.ID,
+	label string,
+	uaOverride *string,
+	planName *string,
+	planRenewalDate *time.Time,
+	planQuotaTokens *int64,
+) error {
 	const q = `
 		UPDATE provider_keys
-		SET label = $3, user_agent_override = $4, updated_at = now()
+		SET label = $3,
+		    user_agent_override = $4,
+		    plan_name = $5,
+		    plan_renewal_date = $6,
+		    plan_quota_tokens = $7,
+		    updated_at = now()
 		WHERE organization_id = $1 AND id = $2`
-	tag, err := r.pool.Exec(ctx, q, int64(orgID), int64(keyID), label, ptrToText(uaOverride))
+	tag, err := r.pool.Exec(ctx, q,
+		int64(orgID), int64(keyID), label,
+		ptrToText(uaOverride),
+		ptrToText(planName), ptrToDate(planRenewalDate), ptrToInt8(planQuotaTokens),
+	)
 	if err != nil {
 		return fmt.Errorf("KeyRepo.UpdateMetadata: %w", err)
 	}
@@ -448,24 +475,28 @@ func (r *KeyRepo) Delete(ctx context.Context, orgID domain.OrganizationID, keyID
 // scanKey mapeia coluna→domain.ProviderKey (DRY entre Get* e List*).
 func scanKey(row pgx.Row) (*domain.ProviderKey, error) {
 	var (
-		k              domain.ProviderKey
-		providerID     int64
-		orgID          int64
-		encValue       []byte
-		status         string
-		disabledReason pgtype.Text
-		disabledAtT    pgtype.Timestamptz
-		disabledUntilT pgtype.Timestamptz
-		lastErrorAtT   pgtype.Timestamptz
-		lastErrorHint  pgtype.Text
-		lastUsedT      pgtype.Timestamptz
-		uaOverride     pgtype.Text
+		k               domain.ProviderKey
+		providerID      int64
+		orgID           int64
+		encValue        []byte
+		status          string
+		disabledReason  pgtype.Text
+		disabledAtT     pgtype.Timestamptz
+		disabledUntilT  pgtype.Timestamptz
+		lastErrorAtT    pgtype.Timestamptz
+		lastErrorHint   pgtype.Text
+		lastUsedT       pgtype.Timestamptz
+		uaOverride      pgtype.Text
+		planName        pgtype.Text
+		planRenewalDate pgtype.Date
+		planQuotaTokens pgtype.Int8
 	)
 	err := row.Scan(
 		&k.ID, &providerID, &orgID, &k.Label, &encValue, &k.EncryptionKeyID,
 		&status, &disabledReason, &disabledAtT, &disabledUntilT, &k.ErrorCount,
 		&k.ConsecutiveErrors, &lastErrorAtT, &lastErrorHint, &lastUsedT,
-		&uaOverride, &k.CreatedAt, &k.UpdatedAt,
+		&uaOverride, &planName, &planRenewalDate, &planQuotaTokens,
+		&k.CreatedAt, &k.UpdatedAt,
 	)
 	if err != nil {
 		return nil, err
@@ -484,6 +515,12 @@ func scanKey(row pgx.Row) (*domain.ProviderKey, error) {
 	k.LastErrorHint = textToPtr(lastErrorHint)
 	k.LastUsedAt = timestamptzToPtr(lastUsedT)
 	k.UserAgentOverride = textToPtr(uaOverride)
+	k.PlanName = textToPtr(planName)
+	k.PlanRenewalDate = dateToPtr(planRenewalDate)
+	if planQuotaTokens.Valid {
+		v := planQuotaTokens.Int64
+		k.PlanQuotaTokens = &v
+	}
 	return &k, nil
 }
 

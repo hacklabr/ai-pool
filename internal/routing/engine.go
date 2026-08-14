@@ -49,6 +49,8 @@ type RoutingEngine struct {
 	autoDisable *AutoDisableManager
 	logger      *slog.Logger
 	now         func() time.Time
+	// auditor registra reativações lazy no audit_log (issue #19). nil-safe.
+	auditor KeyTransitionAuditor
 }
 
 // EngineOption configura o RoutingEngine no construtor.
@@ -62,6 +64,12 @@ func WithEngineLogger(l *slog.Logger) EngineOption {
 // WithEngineClock injeta um clock (testes determinísticos).
 func WithEngineClock(now func() time.Time) EngineOption {
 	return func(e *RoutingEngine) { e.now = now }
+}
+
+// SetTransitionAuditor injeta o auditor de transições (issue #19). Opcional
+// (nil-safe): usado para auditar a reativação lazy (ReactivateExpiredKeys).
+func (e *RoutingEngine) SetTransitionAuditor(a KeyTransitionAuditor) {
+	e.auditor = a
 }
 
 // NewRoutingEngine cria o engine com todos os adapters.
@@ -128,6 +136,14 @@ func (e *RoutingEngine) ResolveKeyWithAffinity(
 		now := e.now()
 		if reactivated, err := e.deps.ReactivateExpiredKeys(ctx, orgID, now); err == nil {
 			for _, kid := range reactivated {
+				// Auditoria da reativação lazy (issue #19, RF-03).
+				// Best-effort — não pode falhar a resolução por erro de audit.
+				if e.auditor != nil {
+					if aerr := e.auditor.AppendKeyTransition(ctx, orgID, kid, AuditActionReactivate,
+						map[string]any{"source": "lazy"}); aerr != nil {
+						e.logger.Debug("lazy reactivation audit failed", "key_id", kid, "err", aerr)
+					}
+				}
 				// Precisamos do providerID para OnKeyReenabled. Como não temos
 				// ele aqui, passamos 0 e o LRUStore trata por lookup interno.
 				// Na implementação MemoryLRUStore, OnKeyReenabled recebe
