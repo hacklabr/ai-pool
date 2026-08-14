@@ -45,7 +45,7 @@ func TestRunMigrations_AppliesSchema(t *testing.T) {
 		t.Fatalf("RunMigrations up: %v", err)
 	}
 
-	// 2. Versão esperada = timestamp da primeira migration.
+	// 2. Versão esperada = timestamp da última migration aplicada.
 	v, dirty, err := MigrationsVersion(ctx, dsn)
 	if err != nil {
 		t.Fatalf("MigrationsVersion: %v", err)
@@ -53,8 +53,8 @@ func TestRunMigrations_AppliesSchema(t *testing.T) {
 	if dirty {
 		t.Fatalf("schema marcado como dirty")
 	}
-	if v != 202606252100 {
-		t.Fatalf("versão esperada 202606252100, obtida %d", v)
+	if v != 202608141000 {
+		t.Fatalf("versão esperada 202608141000, obtida %d", v)
 	}
 
 	// 3. Idempotência: reaplicar deve ser no-op (ErrNoChange tratado como nil).
