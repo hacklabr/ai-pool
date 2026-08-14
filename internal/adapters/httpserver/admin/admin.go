@@ -69,6 +69,11 @@ type App struct {
 	// invitationRepo e modelRepo são usados para convites de usuários.
 	invitationRepo *postgres.InvitationRepo
 	modelRepo      *postgres.ModelRepo
+	// modelSyncRunner executa rodadas de sincronização do catálogo de modelos
+	// sob demanda (issue #25, botão "Sincronizar agora"). Satisfeita pelo
+	// *modelsync.Syncer do wiring do main (mesma instância do job periódico).
+	// nil-safe: sem runner, POST /api/web/admin/models/sync responde 503.
+	modelSyncRunner ModelSyncRunner
 	// quotaMeasurementRepo lê as medições empíricas de cota (issue #20,
 	// RF-05) para o denominador calibrado na página de chaves.
 	quotaMeasurementRepo *postgres.KeyQuotaMeasurementRepo
@@ -168,6 +173,13 @@ func (a *App) SetDecryptor(dec domain.KeyDecryptor) {
 // de chaves. Tipicamente o mesmo *http.Client do proxy.NewUpstreamClient.
 func (a *App) SetUpstreamClient(c *http.Client) {
 	a.upstreamClient = c
+}
+
+// SetModelSyncRunner injeta o sincronizador do catálogo de modelos (issue #25,
+// botão "Sincronizar agora"). Deve ser a MESMA instância usada pelo job
+// periódico/CLI no main. Nil-safe: sem runner, a rota de sync responde 503.
+func (a *App) SetModelSyncRunner(r ModelSyncRunner) {
+	a.modelSyncRunner = r
 }
 
 // SetTemplates injeta o renderizador de templates HTML (F8). Sem isto, os
@@ -300,6 +312,10 @@ func (a *App) Handler() http.Handler {
 	adminGrp.HandleFunc("POST /api/web/admin/providers/{id}/toggle-active", a.handleAdminToggleProviderActive)
 	adminGrp.HandleFunc("GET /api/web/admin/models", a.handleAdminListModels)
 	adminGrp.HandleFunc("POST /api/web/admin/models", a.handleAdminCreateModel)
+	// Sync do catálogo sob demanda (issue #25, botão "Sincronizar agora").
+	// Registrado ANTES das rotas {id} por clareza (o ServeMux do Go 1.22+
+	// prefere o segmento literal "sync" sobre o wildcard {id}).
+	adminGrp.HandleFunc("POST /api/web/admin/models/sync", a.handleAdminSyncModels)
 	adminGrp.HandleFunc("GET /api/web/admin/models/{id}", a.handleAdminGetModel)
 	adminGrp.HandleFunc("PATCH /api/web/admin/models/{id}", a.handleAdminUpdateModel)
 	adminGrp.HandleFunc("DELETE /api/web/admin/models/{id}", a.handleAdminDeleteModel)

@@ -27,6 +27,7 @@ func TestAdminRoutes_RequireAuth(t *testing.T) {
 		{"PATCH", "/api/web/admin/models/1", http.StatusForbidden},
 		{"DELETE", "/api/web/admin/models/1", http.StatusForbidden},
 		{"POST", "/api/web/admin/models/1/toggle-active", http.StatusForbidden},
+		{"POST", "/api/web/admin/models/sync", http.StatusForbidden},
 		{"GET", "/api/web/admin/keys/1", http.StatusUnauthorized},
 		{"PATCH", "/api/web/admin/keys/1", http.StatusForbidden},
 		{"DELETE", "/api/web/admin/keys/1", http.StatusForbidden},

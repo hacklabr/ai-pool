@@ -200,12 +200,13 @@ func main() {
 	}
 
 	// === Model Sync (RF-11) ===
-	// Job periódico que reconcilia a tabela models com a listagem de cada
-	// provedor (ADR-0015). Intervalo 0 = job desativado (o CLI --sync-models
-	// continua disponível). O sync inicial roda dentro de Start, que o caller
-	// invoca em goroutine — nunca bloqueia readiness (fail-open).
+	// Syncer que reconcilia a tabela models com a listagem de cada provedor
+	// (ADR-0015). Criado sempre que há DB: alimenta o job periódico (abaixo,
+	// se o intervalo > 0) E o botão "Sincronizar agora" do admin (issue #25)
+	// — mesma instância, mesma configuração. Intervalo 0 = apenas job
+	// desativado (o botão e o CLI --sync-models continuam disponíveis).
 	var modelSyncJob *modelsync.Job
-	if pool != nil && cfg.ModelSyncInterval > 0 {
+	if pool != nil {
 		syncer := modelsync.NewSyncer(
 			postgres.NewProviderRepo(pool),
 			postgres.NewKeyRepo(pool),
@@ -215,7 +216,13 @@ func main() {
 			logger,
 			domain.OrganizationID(cfg.DefaultOrgID),
 		)
-		modelSyncJob = modelsync.NewJob(syncer, cfg.ModelSyncInterval, logger)
+		if cfg.ModelSyncInterval > 0 {
+			modelSyncJob = modelsync.NewJob(syncer, cfg.ModelSyncInterval, logger)
+		}
+		// Issue #25: botão "Sincronizar agora" na página admin de modelos.
+		if adminApp != nil {
+			adminApp.SetModelSyncRunner(syncer)
+		}
 	}
 
 	// === HTTP servers ===
