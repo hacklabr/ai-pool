@@ -14,7 +14,7 @@
             hx-headers='{"X-CSRF-Token": "{{$.CSRFToken}}"}'
             hx-confirm="Sincronizar o catálogo com todos os provedores ativos agora? Modelos ausentes serão desativados e novos modelos adicionados."
             hx-disabled-elt="this"
-            hx-on::after-request="if(event.detail.successful){try{const d=JSON.parse(event.detail.xhr.responseText);const s=d.summary||{};let msg='Sincronização concluída: '+(s.added||0)+' adicionados, '+(s.reactivated||0)+' reativados, '+(s.deactivated||0)+' desativados.';const sk=(d.providers||[]).filter(p=>p.skipped);if(sk.length>0){msg+='\nIgnorados ('+sk.length+'): '+sk.map(p=>p.slug+' ('+(p.skip_reason||'motivo desconhecido')+')').join(', ')}alert(msg)}catch(e){alert('Sincronização concluída.')}location.reload()}else{const s=event.detail.xhr.status;alert('Falha na sincronização (HTTP '+s+')')}">
+            hx-on::after-request="if(event.detail.successful){try{const d=JSON.parse(event.detail.xhr.responseText);const s=d.summary||{};let msg='Sincronização concluída: '+(s.added||0)+' adicionados, '+(s.reactivated||0)+' reativados, '+(s.deactivated||0)+' desativados, '+(s.enriched||0)+' enriquecidos.';const sk=(d.providers||[]).filter(p=>p.skipped);if(sk.length>0){msg+='\nIgnorados ('+sk.length+'): '+sk.map(p=>p.slug+' ('+(p.skip_reason||'motivo desconhecido')+')').join(', ')}alert(msg)}catch(e){alert('Sincronização concluída.')}location.reload()}else{const s=event.detail.xhr.status;alert('Falha na sincronização (HTTP '+s+')')}">
       Sincronizar agora
     </button>
   </div>

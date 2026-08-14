@@ -34,6 +34,7 @@ type syncProviderResult struct {
 	Added       int    `json:"added"`
 	Reactivated int    `json:"reactivated"`
 	Deactivated int    `json:"deactivated"`
+	Enriched    int    `json:"enriched"`
 	Skipped     bool   `json:"skipped"`
 	SkipReason  string `json:"skip_reason,omitempty"`
 }
@@ -50,6 +51,7 @@ type syncSummary struct {
 	Added       int `json:"added"`
 	Reactivated int `json:"reactivated"`
 	Deactivated int `json:"deactivated"`
+	Enriched    int `json:"enriched"`
 	Skipped     int `json:"skipped"`
 }
 
@@ -62,16 +64,18 @@ func buildSyncResponse(report *modelsync.Report) syncResponse {
 			Added:       len(p.Added),
 			Reactivated: len(p.Reactivated),
 			Deactivated: len(p.Deactivated),
+			Enriched:    len(p.Enriched),
 			Skipped:     p.Skipped,
 			SkipReason:  p.SkipReason,
 		})
 	}
-	added, reactivated, deactivated, skipped := report.Totals()
+	added, reactivated, deactivated, enriched, skipped := report.Totals()
 	resp.Summary = syncSummary{
 		Providers:   len(report.Providers),
 		Added:       added,
 		Reactivated: reactivated,
 		Deactivated: deactivated,
+		Enriched:    enriched,
 		Skipped:     skipped,
 	}
 	return resp
