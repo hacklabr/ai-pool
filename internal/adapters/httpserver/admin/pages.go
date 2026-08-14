@@ -1,6 +1,7 @@
 package admin
 
 import (
+	"fmt"
 	"net/http"
 	"strings"
 	"time"
@@ -301,6 +302,92 @@ func (a *App) handlePageAdminProviders(w http.ResponseWriter, r *http.Request) {
 
 // --- Admin: Chaves ----------------------------------------------------------
 
+// keyPlanUsage — uso do plano por ciclo para uma chave (issue #20,
+// RF-02/RF-04). Exibido na página de chaves quando a chave tem data de
+// renovação cadastrada.
+type keyPlanUsage struct {
+	PlanConfigured bool // data de renovação presente
+
+	// Ciclo semanal: % consumido (vazio quando sem denominador), tokens
+	// usados, confiança do denominador e fim do ciclo.
+	WeeklyPctText        string
+	WeeklyTokens         int64
+	WeeklyConfidenceText string // "calibrada" | "cadastrada" | ""
+	WeeklyEnd            time.Time
+
+	// Ciclo mensal (base da regra de subutilização).
+	MonthlyPctText        string
+	MonthlyTokens         int64
+	MonthlyConfidenceText string
+	MonthlyEnd            time.Time
+
+	DaysUntilMonthlyEnd int
+	Underutilized       bool // RF-04: badge "subutilizada"
+	NeedsQuota          bool // sem denominador mensal → UI pede a cota
+}
+
+// planUsageDisplay monta o DTO de exibição a partir do uso nos ciclos e do
+// denominador efetivo (calibrado × cadastrado).
+func planUsageDisplay(
+	weeklyUsage, monthlyUsage postgres.KeyWindowUsage,
+	weeklyQuota, monthlyQuota domain.EffectiveQuota,
+	weeklyEnd, monthlyEnd time.Time,
+	now time.Time,
+	thresholdPct float64,
+	thresholdDays int,
+) keyPlanUsage {
+	p := keyPlanUsage{
+		PlanConfigured:      true,
+		WeeklyTokens:        weeklyUsage.TotalTokens,
+		MonthlyTokens:       monthlyUsage.TotalTokens,
+		WeeklyEnd:           weeklyEnd,
+		MonthlyEnd:          monthlyEnd,
+		DaysUntilMonthlyEnd: domain.DaysUntilCycleEnd(monthlyEnd, now),
+	}
+	if q := weeklyQuota; q.Confidence != domain.QuotaConfidenceNone {
+		p.WeeklyPctText = fmt.Sprintf("%.1f%%", float64(weeklyUsage.TotalTokens)/float64(q.Denominator)*100)
+		p.WeeklyConfidenceText = confidenceLabel(q.Confidence)
+	}
+	if q := monthlyQuota; q.Confidence != domain.QuotaConfidenceNone {
+		p.MonthlyPctText = fmt.Sprintf("%.1f%%", float64(monthlyUsage.TotalTokens)/float64(q.Denominator)*100)
+		p.MonthlyConfidenceText = confidenceLabel(q.Confidence)
+	} else {
+		p.NeedsQuota = true
+	}
+	// Subutilização (RF-04): exige plano configurado (âncora + denominador
+	// mensal disponível — calibrado ou cadastrado).
+	var monthlyPct float64
+	if p.MonthlyPctText != "" {
+		monthlyPct = float64(monthlyUsage.TotalTokens) / float64(monthlyQuota.Denominator) * 100
+	}
+	p.Underutilized = domain.IsUnderutilized(
+		monthlyQuota.Confidence != domain.QuotaConfidenceNone,
+		monthlyPct, p.DaysUntilMonthlyEnd, thresholdDays, thresholdPct,
+	)
+	return p
+}
+
+// confidenceLabel traduz a confiança do denominador para o painel.
+func confidenceLabel(c string) string {
+	switch c {
+	case domain.QuotaConfidenceCalibrated:
+		return "calibrada"
+	case domain.QuotaConfidenceConfigured:
+		return "cadastrada"
+	default:
+		return ""
+	}
+}
+
+// keysContent é o payload da página de chaves (handlePageAdminKeys).
+type keysContent struct {
+	Keys         []keyListItem
+	Providers    map[int64]string               // id → slug para agrupamento visual
+	ProviderList []providerListItem             // id+name+slug ordenados p/ o <select> do form de criação
+	KeyUsage     map[int64]postgres.KeyUsageRow // key_id → uso global (7d)
+	PlanUsage    map[int64]keyPlanUsage         // key_id → uso do plano por ciclo (issue #20, RF-02)
+}
+
 // handlePageAdminKeys renderiza a gestão de chaves (a tela mais complexa).
 //
 // Lista todas as chaves agrupadas por provider, com 4 estados visuais:
@@ -323,13 +410,11 @@ func (a *App) handlePageAdminKeys(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	type keysContent struct {
-		Keys         []keyListItem
-		Providers    map[int64]string               // id → slug para agrupamento visual
-		ProviderList []providerListItem             // id+name+slug ordenados p/ o <select> do form de criação
-		KeyUsage     map[int64]postgres.KeyUsageRow // key_id → uso global (7d)
+	content := keysContent{
+		Providers: map[int64]string{},
+		KeyUsage:  map[int64]postgres.KeyUsageRow{},
+		PlanUsage: map[int64]keyPlanUsage{},
 	}
-	content := keysContent{Providers: map[int64]string{}, KeyUsage: map[int64]postgres.KeyUsageRow{}}
 
 	// Uso global por chave (7d) — exibido como colunas na lista de chaves.
 	if a.usageRepo != nil {
@@ -381,10 +466,107 @@ func (a *App) handlePageAdminKeys(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// Uso do plano por ciclo (issue #20, RF-02): janelas semanal/mensal
+	// ancoradas em plan_renewal_date. Cada chave pode ter âncora distinta,
+	// então agrupamos as chaves por JANELA DISTINTA e fazemos UMA query por
+	// grupo (tipicamente 1 por ciclo — nunca N+1 por chave).
+	a.loadPlanUsage(r, sess.OrgID, content.Keys, &content)
+
 	data := a.basePageData(r, "Chaves — AI Provider Pool", "keys")
 	data.Content = content
 	if err := a.renderer.renderPage(w, "pages/keys.html", data); err != nil {
 		http.Error(w, "render error", http.StatusInternalServerError)
+	}
+}
+
+// loadPlanUsage computa o uso do plano por ciclo para as chaves da página e
+// preenche content.PlanUsage (issue #20, RF-02/RF-04/RF-05). Tolerante a
+// erros de DB: sem dados, as chaves apenas ficam sem a linha de uso.
+func (a *App) loadPlanUsage(r *http.Request, orgID int64, keys []keyListItem, content *keysContent) {
+	if a.usageRepo == nil {
+		return
+	}
+	now := time.Now()
+
+	// 1. Parsing das âncoras + agrupamento por janela distinta.
+	type planWindow struct{ start, end time.Time }
+	monthlyGroups := map[planWindow][]int64{}
+	weeklyGroups := map[planWindow][]int64{}
+	renewalByKey := map[int64]time.Time{}
+	quotaByKey := map[int64]*int64{}
+	for _, k := range keys {
+		if k.PlanRenewalDate == nil {
+			continue
+		}
+		renewal, err := time.Parse("2006-01-02", strings.TrimSpace(*k.PlanRenewalDate))
+		if err != nil {
+			continue // data inválida no DB: fica sem uso de plano (defensivo)
+		}
+		renewalByKey[k.ID] = renewal
+		quotaByKey[k.ID] = k.PlanQuotaTokens
+		ms, me := domain.MonthlyCycleWindow(renewal, now)
+		mw := planWindow{ms, me}
+		monthlyGroups[mw] = append(monthlyGroups[mw], k.ID)
+		ws, we := domain.WeeklyCycleWindow(renewal, now)
+		ww := planWindow{ws, we}
+		weeklyGroups[ww] = append(weeklyGroups[ww], k.ID)
+	}
+	if len(renewalByKey) == 0 {
+		return
+	}
+
+	// 2. Soma de tokens por janela distinta (1 query por grupo).
+	monthlyUsage := map[int64]postgres.KeyWindowUsage{}
+	for w, ids := range monthlyGroups {
+		if u, err := a.usageRepo.QueryKeyUsageInWindow(r.Context(), orgID, ids, w.start, w.end); err == nil {
+			for id, v := range u {
+				monthlyUsage[id] = v
+			}
+		}
+	}
+	weeklyUsage := map[int64]postgres.KeyWindowUsage{}
+	for w, ids := range weeklyGroups {
+		if u, err := a.usageRepo.QueryKeyUsageInWindow(r.Context(), orgID, ids, w.start, w.end); err == nil {
+			for id, v := range u {
+				weeklyUsage[id] = v
+			}
+		}
+	}
+
+	// 3. Piso calibrado por camada (MIN das medições, RF-05) — 1 query.
+	var minByLayer map[int64]map[string]int64
+	if a.quotaMeasurementRepo != nil {
+		ids := make([]int64, 0, len(renewalByKey))
+		for id := range renewalByKey {
+			ids = append(ids, id)
+		}
+		if m, err := a.quotaMeasurementRepo.MinTokensByLayer(r.Context(), orgID, ids); err == nil {
+			minByLayer = m
+		}
+	}
+
+	// 4. Monta o DTO de exibição por chave.
+	for id, renewal := range renewalByKey {
+		_, me := domain.MonthlyCycleWindow(renewal, now)
+		_, we := domain.WeeklyCycleWindow(renewal, now)
+		var weeklyFloor, monthlyFloor *int64
+		if layers, ok := minByLayer[id]; ok {
+			if v, ok := layers["weekly"]; ok {
+				f := v
+				weeklyFloor = &f
+			}
+			if v, ok := layers["monthly"]; ok {
+				f := v
+				monthlyFloor = &f
+			}
+		}
+		content.PlanUsage[id] = planUsageDisplay(
+			weeklyUsage[id], monthlyUsage[id],
+			domain.ResolveEffectiveQuota(weeklyFloor, quotaByKey[id]),
+			domain.ResolveEffectiveQuota(monthlyFloor, quotaByKey[id]),
+			we, me, now,
+			a.underutilizationThresholdPct, a.underutilizationDays,
+		)
 	}
 }
 

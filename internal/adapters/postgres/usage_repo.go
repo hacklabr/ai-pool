@@ -643,6 +643,52 @@ func (r *UsageLogRepo) QueryKeyUsageFromLogs(ctx context.Context, orgID, userID 
 	return out, rows.Err()
 }
 
+// KeyWindowUsage é a soma de tokens de uma chave numa janela [from, to)
+// (issue #20, RF-02). TotalTokens = prompt + completion (cached é subset
+// do prompt — mesma convenção de KeyUsageRow).
+type KeyWindowUsage struct {
+	PromptTokens     int64
+	CompletionTokens int64
+	CachedTokens     int64
+	TotalTokens      int64
+}
+
+// QueryKeyUsageInWindow soma tokens por chave numa janela [from, to) para o
+// CONJUNTO de keyIDs em UMA query (key_id = ANY($2) — aproveita o índice
+// idx_usage_logs_key_time). Chaves sem uso na janela não aparecem no mapa
+// (zero implícito). Usada pelo uso do plano por ciclo (RF-02) e pela
+// calibração empírica de cota (RF-05).
+func (r *UsageLogRepo) QueryKeyUsageInWindow(
+	ctx context.Context, orgID int64, keyIDs []int64, from, to time.Time,
+) (map[int64]KeyWindowUsage, error) {
+	out := make(map[int64]KeyWindowUsage, len(keyIDs))
+	if len(keyIDs) == 0 {
+		return out, nil
+	}
+	const q = `SELECT key_id,
+		COALESCE(SUM(prompt_tokens),0),
+		COALESCE(SUM(completion_tokens),0),
+		COALESCE(SUM(cached_tokens),0),
+		COALESCE(SUM(prompt_tokens),0)+COALESCE(SUM(completion_tokens),0)
+	FROM usage_logs
+	WHERE organization_id = $1 AND key_id = ANY($2) AND created_at >= $3 AND created_at < $4
+	GROUP BY key_id`
+	rows, err := r.pool.Query(ctx, q, orgID, keyIDs, from, to)
+	if err != nil {
+		return nil, fmt.Errorf("UsageLogRepo.QueryKeyUsageInWindow: %w", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var keyID int64
+		var u KeyWindowUsage
+		if err := rows.Scan(&keyID, &u.PromptTokens, &u.CompletionTokens, &u.CachedTokens, &u.TotalTokens); err != nil {
+			return nil, fmt.Errorf("UsageLogRepo.QueryKeyUsageInWindow scan: %w", err)
+		}
+		out[keyID] = u
+	}
+	return out, rows.Err()
+}
+
 // HourlyRow é um ponto da série horária (para o gráfico de utilização por hora).
 type HourlyRow struct {
 	BucketHour   time.Time
