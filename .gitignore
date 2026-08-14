@@ -41,6 +41,9 @@ tmp/
 coverage.out
 coverage.html
 
+# Worktrees do fluxo Maestra
+.worktrees/
+
 # Docker volumes locais (dev)
 .pgdata/
 
