@@ -155,7 +155,11 @@ type keyListItem struct {
 	ErrorCount        int        `json:"error_count"`
 	LastUsedAt        *time.Time `json:"last_used_at,omitempty"`
 	UserAgentOverride *string    `json:"user_agent_override,omitempty"`
-	CreatedAt         time.Time  `json:"created_at"`
+	// Campos de plano (issue #19, RF-01). PlanRenewalDate é YYYY-MM-DD (DATE).
+	PlanName        *string   `json:"plan_name,omitempty"`
+	PlanRenewalDate *string   `json:"plan_renewal_date,omitempty"`
+	PlanQuotaTokens *int64    `json:"plan_quota_tokens,omitempty"`
+	CreatedAt       time.Time `json:"created_at"`
 }
 
 // createKeyRequest payload de POST /api/web/admin/keys.
@@ -168,6 +172,11 @@ type createKeyRequest struct {
 	Label             string  `json:"label"`
 	Value             string  `json:"value"` // segredo do provedor (plaintext no request)
 	UserAgentOverride *string `json:"user_agent_override,omitempty"`
+	// Campos de plano (issue #19, RF-01). Opcionais: chaves pay-as-you-go
+	// não têm ciclo de plano.
+	PlanName        string  `json:"plan_name"`
+	PlanRenewalDate *string `json:"plan_renewal_date,omitempty"` // YYYY-MM-DD
+	PlanQuotaTokens *int64  `json:"plan_quota_tokens,omitempty"`
 }
 
 // handleAdminListKeys lista todas as keys da org (incluindo desabilitadas).
@@ -182,7 +191,9 @@ func (a *App) handleAdminListKeys(w http.ResponseWriter, r *http.Request) {
 	}
 	rows, err := a.pool.Query(r.Context(), `
 		SELECT id, provider_id, label, status, disabled_reason, disabled_until,
-		       error_count, last_used_at, user_agent_override, created_at
+		       error_count, last_used_at, user_agent_override,
+		       plan_name, TO_CHAR(plan_renewal_date, 'YYYY-MM-DD'), plan_quota_tokens,
+		       created_at
 		FROM provider_keys
 		WHERE organization_id = $1
 		ORDER BY provider_id, label`, sess.OrgID)
@@ -195,17 +206,51 @@ func (a *App) handleAdminListKeys(w http.ResponseWriter, r *http.Request) {
 	out := make([]keyListItem, 0)
 	for rows.Next() {
 		var k keyListItem
-		var disabledReason, uaOverride *string
+		var disabledReason, uaOverride, planName, planRenewal *string
+		var planQuota *int64
 		if err := rows.Scan(&k.ID, &k.ProviderID, &k.Label, &k.Status, &disabledReason,
-			&k.DisabledUntil, &k.ErrorCount, &k.LastUsedAt, &uaOverride, &k.CreatedAt); err != nil {
+			&k.DisabledUntil, &k.ErrorCount, &k.LastUsedAt, &uaOverride,
+			&planName, &planRenewal, &planQuota, &k.CreatedAt); err != nil {
 			writeAPIError(w, http.StatusInternalServerError, "internal", "scan error")
 			return
 		}
 		k.DisabledReason = disabledReason
 		k.UserAgentOverride = uaOverride
+		k.PlanName = planName
+		k.PlanRenewalDate = planRenewal
+		k.PlanQuotaTokens = planQuota
 		out = append(out, k)
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"keys": out})
+}
+
+// parsePlanFields valida e converte os campos de plano do payload admin
+// (issue #19, RF-01). Semântica: valores vazios/ausentes → nil (sem plano).
+// Retorna erro legível quando a validação falha.
+func parsePlanFields(planName string, renewalDate *string, quotaTokens *int64) (*string, *time.Time, *int64, string) {
+	var renewal *time.Time
+	if renewalDate != nil && strings.TrimSpace(*renewalDate) != "" {
+		t, err := time.Parse("2006-01-02", strings.TrimSpace(*renewalDate))
+		if err != nil {
+			return nil, nil, nil, "plan_renewal_date deve estar no formato YYYY-MM-DD"
+		}
+		renewal = &t
+	}
+	var quota *int64
+	if quotaTokens != nil {
+		if *quotaTokens <= 0 {
+			return nil, nil, nil, "plan_quota_tokens deve ser maior que zero"
+		}
+		quota = quotaTokens
+	}
+	var name *string
+	if s := strings.TrimSpace(planName); s != "" {
+		if len(s) > 100 {
+			s = s[:100]
+		}
+		name = &s
+	}
+	return name, renewal, quota, ""
 }
 
 // handleAdminCreateKey cria uma nova key.
@@ -234,6 +279,13 @@ func (a *App) handleAdminCreateKey(w http.ResponseWriter, r *http.Request) {
 		label = label[:100]
 	}
 
+	// Campos de plano (issue #19): validação leve no payload.
+	planName, planRenewal, planQuota, planErr := parsePlanFields(req.PlanName, req.PlanRenewalDate, req.PlanQuotaTokens)
+	if planErr != "" {
+		writeAPIError(w, http.StatusBadRequest, "bad_request", planErr)
+		return
+	}
+
 	// F7: aplicar envelope encryption se o encryptor está configurado.
 	// Em DEV_MODE sem encryptor, cai para plaintext (IdentityDecryptor funciona).
 	var encryptedValue []byte
@@ -258,6 +310,9 @@ func (a *App) handleAdminCreateKey(w http.ResponseWriter, r *http.Request) {
 		EncryptionKeyID:   encryptionKeyID,
 		Status:            domain.KeyStatusEnabled,
 		UserAgentOverride: req.UserAgentOverride,
+		PlanName:          planName,
+		PlanRenewalDate:   planRenewal,
+		PlanQuotaTokens:   planQuota,
 	}
 	id, err := a.keyRepo.Create(r.Context(), k)
 	if err != nil {
@@ -293,6 +348,10 @@ func (a *App) handleAdminForceDisableKey(w http.ResponseWriter, r *http.Request)
 		writeAPIError(w, http.StatusInternalServerError, "internal", "could not disable key")
 		return
 	}
+	// Auditoria (issue #19, RF-03): transição manual com o ator admin.
+	// Best-effort — falha de audit não reverte a transição.
+	a.auditKeyTransition(r, sess, id, "provider_key.manual_disable",
+		map[string]any{"status": "manual_disabled"})
 	// Métrica Prometheus (F11): disable manual pelo admin.
 	observability.IncKeyDisabled("manual")
 	writeJSON(w, http.StatusOK, map[string]string{"status": "manual_disabled"})
@@ -319,7 +378,30 @@ func (a *App) handleAdminForceEnableKey(w http.ResponseWriter, r *http.Request) 
 		writeAPIError(w, http.StatusInternalServerError, "internal", "could not enable key")
 		return
 	}
+	// Auditoria (issue #19, RF-03): reativação manual com o ator admin.
+	// Best-effort — falha de audit não reverte a transição.
+	a.auditKeyTransition(r, sess, id, "provider_key.manual_enable",
+		map[string]any{"status": "enabled"})
 	writeJSON(w, http.StatusOK, map[string]string{"status": "enabled"})
+}
+
+// auditKeyTransition registra um evento de transição de chave no audit_log
+// com o ator admin da sessão (issue #19, RF-03). Best-effort: falhas são
+// silenciosas — a auditoria não pode derrubar a operação já persistida.
+func (a *App) auditKeyTransition(r *http.Request, sess *sessionContext, keyID int64, action string, metadata map[string]any) {
+	if a.auditRepo == nil || sess == nil {
+		return
+	}
+	actor := int64(sess.UserID)
+	kid := keyID
+	_ = a.auditRepo.Append(r.Context(), postgres.AuditEntry{
+		OrganizationID: int64(sess.OrgID),
+		ActorUserID:    &actor,
+		Action:         action,
+		EntityType:     "provider_key",
+		EntityID:       &kid,
+		Metadata:       metadata,
+	})
 }
 
 // --- Admin: Providers CRUD extras -------------------------------------------
@@ -494,6 +576,11 @@ func (a *App) handleAdminDeleteProvider(w http.ResponseWriter, r *http.Request) 
 type updateKeyRequest struct {
 	Label             string  `json:"label"`
 	UserAgentOverride *string `json:"user_agent_override"`
+	// Campos de plano (issue #19). Ausentes/vazios → NULL (update completo
+	// do plano: enviar vazio limpa o campo).
+	PlanName        string  `json:"plan_name"`
+	PlanRenewalDate *string `json:"plan_renewal_date,omitempty"` // YYYY-MM-DD
+	PlanQuotaTokens *int64  `json:"plan_quota_tokens,omitempty"`
 }
 
 func keyFromPath(r *http.Request) (int64, bool) {
@@ -522,19 +609,32 @@ func (a *App) handleAdminGetKey(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
-		"key": keyListItem{
-			ID:                int64(k.ID),
-			ProviderID:        int64(k.ProviderID),
-			Label:             k.Label,
-			Status:            string(k.Status),
-			DisabledReason:    (*string)(k.DisabledReason),
-			DisabledUntil:     k.DisabledUntil,
-			ErrorCount:        k.ErrorCount,
-			LastUsedAt:        k.LastUsedAt,
-			UserAgentOverride: k.UserAgentOverride,
-			CreatedAt:         k.CreatedAt,
-		},
+		"key": keyListItemFromDomain(k),
 	})
+}
+
+// keyListItemFromDomain monta o DTO de listagem a partir da entidade
+// (issue #19: inclui os campos de plano; a data é formatada YYYY-MM-DD).
+func keyListItemFromDomain(k *domain.ProviderKey) keyListItem {
+	item := keyListItem{
+		ID:                int64(k.ID),
+		ProviderID:        int64(k.ProviderID),
+		Label:             k.Label,
+		Status:            string(k.Status),
+		DisabledReason:    (*string)(k.DisabledReason),
+		DisabledUntil:     k.DisabledUntil,
+		ErrorCount:        k.ErrorCount,
+		LastUsedAt:        k.LastUsedAt,
+		UserAgentOverride: k.UserAgentOverride,
+		PlanName:          k.PlanName,
+		PlanQuotaTokens:   k.PlanQuotaTokens,
+		CreatedAt:         k.CreatedAt,
+	}
+	if k.PlanRenewalDate != nil {
+		s := k.PlanRenewalDate.UTC().Format("2006-01-02")
+		item.PlanRenewalDate = &s
+	}
+	return item
 }
 
 // handleAdminUpdateKey atualiza apenas os metadados de uma chave.
@@ -562,7 +662,13 @@ func (a *App) handleAdminUpdateKey(w http.ResponseWriter, r *http.Request) {
 	if len(label) > 100 {
 		label = label[:100]
 	}
-	if err := a.keyRepo.UpdateMetadata(r.Context(), domain.OrganizationID(sess.OrgID), domain.ID(id), label, req.UserAgentOverride); err != nil {
+	planName, planRenewal, planQuota, planErr := parsePlanFields(req.PlanName, req.PlanRenewalDate, req.PlanQuotaTokens)
+	if planErr != "" {
+		writeAPIError(w, http.StatusBadRequest, "bad_request", planErr)
+		return
+	}
+	if err := a.keyRepo.UpdateMetadata(r.Context(), domain.OrganizationID(sess.OrgID), domain.ID(id),
+		label, req.UserAgentOverride, planName, planRenewal, planQuota); err != nil {
 		if errors.Is(err, postgres.ErrNotFound) {
 			writeAPIError(w, http.StatusNotFound, "not_found", "key not found")
 			return

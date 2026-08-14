@@ -743,6 +743,10 @@ func buildRoutingEngine(cfg *config.Config, logger *slog.Logger, pool *pgxpool.P
 		lruStore,
 		logger,
 	)
+	// Auditoria de transições de chave (issue #19, RF-03): auto-disable,
+	// reativação (scheduler + lazy) gravam eventos append-only no audit_log.
+	transitionAuditor := postgres.NewKeyTransitionAuditorAdapter(postgres.NewAuditRepo(pool))
+	autoDisable.SetTransitionAuditor(transitionAuditor)
 
 	// Engine deps adapter (ModelRepo + KeyRepo).
 	modelRepo := postgres.NewModelRepo(pool)
@@ -755,6 +759,7 @@ func buildRoutingEngine(cfg *config.Config, logger *slog.Logger, pool *pgxpool.P
 	engine := routing.NewRoutingEngine(
 		engineDeps, decryptor, lruStore, affinityStore, autoDisable, logger,
 	)
+	engine.SetTransitionAuditor(transitionAuditor) // auditoria da reativação lazy
 
 	// Boot seeding: popula o LRUStore com last_used_at reais do DB para
 	// reconstruir o ranking LRU após restart (spec §3.2.2).
@@ -767,6 +772,7 @@ func buildRoutingEngine(cfg *config.Config, logger *slog.Logger, pool *pgxpool.P
 		domain.OrganizationID(cfg.DefaultOrgID),
 		30*time.Second, logger,
 	)
+	scheduler.SetTransitionAuditor(transitionAuditor) // auditoria da reativação
 
 	// Context para jobs de background (scheduler + flusher).
 	bgCtx, bgCancel := context.WithCancel(context.Background())

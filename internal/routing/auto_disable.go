@@ -79,6 +79,8 @@ type AutoDisableManager struct {
 	lruStore domain.LRUStore
 	logger   *slog.Logger
 	now      func() time.Time
+	// auditor registra transições no audit_log (issue #19, RF-03). nil-safe.
+	auditor KeyTransitionAuditor
 
 	mu     sync.RWMutex
 	states map[keyStateKey]*keyState
@@ -116,6 +118,12 @@ func NewAutoDisableManager(
 		now:      time.Now,
 		states:   make(map[keyStateKey]*keyState),
 	}
+}
+
+// SetTransitionAuditor injeta o auditor de transições (issue #19). Opcional
+// (nil-safe): sem auditor, as transições não geram eventos de audit_log.
+func (m *AutoDisableManager) SetTransitionAuditor(a KeyTransitionAuditor) {
+	m.auditor = a
 }
 
 // RecordError registra um erro para a chave e dispara auto-disable se atingir
@@ -205,7 +213,6 @@ func (m *AutoDisableManager) RecordError(
 			"consecutive_disables", st.consecutiveDisableCount,
 		)
 	}
-
 	// 2. Write-through CAS atômico no DB. Se CAS perdido (outro worker já
 	// desabilitou), não é erro — apenas loga e segue.
 	if err := m.keyRepo.TransitionToAutoDisabled(
@@ -213,7 +220,8 @@ func (m *AutoDisableManager) RecordError(
 		st.errorCount, st.errorCount, hint,
 	); err != nil {
 		m.logger.Warn("auto-disable: TransitionToAutoDisabled failed",
-			"key_id", keyID, "err", err)
+			"key_id", keyID,
+			"err", err)
 		// Não propagamos — o erro já foi registrado; próxima chamada pode
 		// tentar de novo. Continuidade do pool não é prejudicada.
 	} else {
@@ -221,6 +229,10 @@ func (m *AutoDisableManager) RecordError(
 		// Observability é importado em auto_disable_test.go; o import real
 		// vive neste arquivo (ver import block no topo).
 		observability.IncKeyDisabled("auto")
+		// Auditoria da transição (issue #19, RF-03): camada do limite +
+		// mensagem upstream sanitizada. Best-effort — falha não derruba a
+		// transição já persistida.
+		m.auditAutoDisable(ctx, orgID, keyID, providerSlug, statusCode, errBody, reason, disabledUntil)
 	}
 
 	// 3. Notifica LRUStore (remove das candidatas).
@@ -236,6 +248,37 @@ func (m *AutoDisableManager) RecordError(
 	st.windowStart = now // reseta janela
 
 	return nil
+}
+
+// auditAutoDisable registra o evento de auto-disable no audit_log com a
+// camada do limite (ClassifyLimitLayer) e a mensagem upstream sanitizada
+// (SanitizeUpstreamMessage — nunca a chave de API). Best-effort.
+func (m *AutoDisableManager) auditAutoDisable(
+	ctx context.Context,
+	orgID domain.OrganizationID,
+	keyID domain.ID,
+	providerSlug string,
+	statusCode int,
+	errBody []byte,
+	reason domain.KeyDisabledReason,
+	disabledUntil time.Time,
+) {
+	if m.auditor == nil {
+		return
+	}
+	layer, _ := ClassifyLimitLayer(providerSlug, statusCode, string(errBody))
+	meta := map[string]any{
+		"reason":         string(reason),
+		"disabled_until": disabledUntil.UTC().Format(time.RFC3339),
+		"limit_layer":    layer,
+		"status_code":    statusCode,
+		"provider_slug":  providerSlug,
+		"error_message":  SanitizeUpstreamMessage(errBody),
+		"trigger":        "auto_disable",
+	}
+	if err := m.auditor.AppendKeyTransition(ctx, orgID, keyID, AuditActionAutoDisable, meta); err != nil {
+		m.logger.Warn("auto-disable: audit append failed", "key_id", keyID, "err", err)
+	}
 }
 
 // ResetCounter reseta contadores da chave (usado em OnKeySucceeded).

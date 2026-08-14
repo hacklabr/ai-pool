@@ -4,6 +4,7 @@ import (
 	"context"
 	"io"
 	"log/slog"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -84,6 +85,33 @@ func (f *fakeLRUStore) EnsureCandidate(_ context.Context, _ domain.ID, _ domain.
 
 func discardLogger() *slog.Logger {
 	return slog.New(slog.NewTextHandler(io.Discard, nil))
+}
+
+// fakeAuditor captura eventos de auditoria para asserção (issue #19).
+type fakeAuditor struct {
+	mu      sync.Mutex
+	events  []string
+	metas   []map[string]any
+	failErr error
+}
+
+func (f *fakeAuditor) AppendKeyTransition(
+	_ context.Context,
+	_ domain.OrganizationID,
+	_ domain.ID,
+	action string,
+	metadata any,
+) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.failErr != nil {
+		return f.failErr
+	}
+	f.events = append(f.events, action)
+	if m, ok := metadata.(map[string]any); ok {
+		f.metas = append(f.metas, m)
+	}
+	return nil
 }
 
 // =============================================================================
@@ -281,4 +309,65 @@ func TestAutoDisable_ConcurrentRecordErrors(t *testing.T) {
 	}
 	wg.Wait()
 	// Não deve panicar; transições ocorrem conforme contagem exceder threshold.
+}
+
+// =============================================================================
+// Auditoria de transições (issue #19, RF-03).
+// =============================================================================
+
+// TestAutoDisable_AuditsTransitionWithUpstreamMessage valida que a transição
+// para auto_disabled gera UM evento de auditoria com a camada do limite e a
+// mensagem upstream sanitizada (amostra real do Z.ai).
+func TestAutoDisable_AuditsTransitionWithUpstreamMessage(t *testing.T) {
+	now := time.Now()
+	m, _, _ := newAutoDisableManagerForTest(t, now)
+	aud := &fakeAuditor{}
+	m.SetTransitionAuditor(aud)
+	ctx := context.Background()
+	const org domain.OrganizationID = 1
+	const key domain.ID = 100
+
+	body := []byte(`{"error":{"code":"1308","message":"Limit of usage is reached for 40 requests in 5 hours, limit will be reset at ` +
+		now.Add(2*time.Hour).UTC().Format(time.RFC3339) + `"}}`)
+	for i := 0; i < 5; i++ {
+		_ = m.RecordError(ctx, org, key, 1, "zai", 429, body)
+	}
+
+	if len(aud.events) != 1 {
+		t.Fatalf("eventos de auditoria = %d, want 1", len(aud.events))
+	}
+	if aud.events[0] != AuditActionAutoDisable {
+		t.Errorf("action = %q, want %q", aud.events[0], AuditActionAutoDisable)
+	}
+	meta := aud.metas[0]
+	if meta["limit_layer"] != LimitLayerWindow5h {
+		t.Errorf("limit_layer = %v, want %q", meta["limit_layer"], LimitLayerWindow5h)
+	}
+	msg, _ := meta["error_message"].(string)
+	if msg == "" || len(msg) > 204 {
+		t.Errorf("error_message inválido: %q (len=%d)", msg, len(msg))
+	}
+	if !strings.Contains(msg, `"code":"1308"`) {
+		t.Errorf("error_message deveria conter a mensagem upstream sanitizada: %q", msg)
+	}
+}
+
+// TestAutoDisable_AuditFailureDoesNotBreakTransition valida que falha do
+// auditor é best-effort (a transição já persistida não é afetada).
+func TestAutoDisable_AuditFailureDoesNotBreakTransition(t *testing.T) {
+	now := time.Now()
+	m, fakeRepo, _ := newAutoDisableManagerForTest(t, now)
+	m.SetTransitionAuditor(&fakeAuditor{failErr: context.DeadlineExceeded})
+	ctx := context.Background()
+	const org domain.OrganizationID = 1
+	const key domain.ID = 100
+
+	for i := 0; i < 5; i++ {
+		if err := m.RecordError(ctx, org, key, 1, "deepseek", 429, []byte(`fail`)); err != nil {
+			t.Fatalf("RecordError[%d]: %v", i, err)
+		}
+	}
+	if fakeRepo.transitions != 1 {
+		t.Errorf("transitions = %d, want 1 (audit failure não pode afetar a transição)", fakeRepo.transitions)
+	}
 }

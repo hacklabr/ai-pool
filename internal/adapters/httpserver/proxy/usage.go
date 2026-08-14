@@ -92,6 +92,7 @@ func (s *Server) RecordProxyUsage(
 	spec upstreamRequestSpec,
 	promptTokens, completionTokens, cachedTokens, statusCode int,
 	latencyMS int64,
+	errorClass *string,
 	providerSlug string,
 	providerID, keyID int64,
 ) {
@@ -115,6 +116,7 @@ func (s *Server) RecordProxyUsage(
 		TotalTokens:      &tt,
 		StatusCode:       &sc,
 		LatencyMS:        &st,
+		ErrorClass:       errorClass,
 		CreatedAt:        time.Now().UTC(),
 		ProviderID:       domain.ID(providerID),
 		KeyID:            domain.ID(keyID),

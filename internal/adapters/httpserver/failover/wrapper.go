@@ -84,8 +84,10 @@ func (w *ChainWrapper) ExecuteProxyRequest(
 	}
 	conversationKey := routing.ResolveConversationKey(conversationID, prefixHash)
 
-	// 2. ProviderSlug — precisamos para o ErrorParser registry. O engine resolve
-	// internamente o provider; passamos vazio e o parserRegistry cai para default.
+	// 2. ProviderSlug — o engine resolve o provider INTERNAMENTE por tentativa;
+	// passamos vazio aqui e o chain usa o slug real da resolução
+	// (routing.attemptSlug) para OnKeyFailed/ErrorParser/ClassifyLimitLayer
+	// (issue #19, de-quebra: parsing provider-aware).
 	providerSlug := ""
 
 	// 3. Executa o chain.
@@ -125,9 +127,13 @@ func (w *ChainWrapper) ExecuteProxyRequest(
 				providerID = int64(resolution.Provider.ID)
 				keyID = int64(resolution.Key.ID)
 			}
+			// error_class para falhas upstream (issue #19, de-quebra b):
+			// 429→quota/rate_limit (via ClassifyLimitLayer quando há corpo),
+			// 401/403→auth, 5xx→5xx; nil em sucesso/erro do cliente.
+			errorClass := routing.ClassifyErrorClass(r.StatusCode, providerSlug, "")
 			w.server.RecordProxyUsage(user, spec,
 				r.PromptTokens, r.CompletionTokens, r.CachedTokens, r.StatusCode,
-				time.Since(start).Milliseconds(), providerSlug, providerID, keyID)
+				time.Since(start).Milliseconds(), errorClass, providerSlug, providerID, keyID)
 			return r.Committed, r.Err
 		},
 	}, w.sendFunc())
