@@ -29,8 +29,8 @@ func (r *ModelRepo) Create(ctx context.Context, m *domain.Model) (domain.ID, err
 		return 0, fmt.Errorf("ModelRepo.Create: nil model")
 	}
 	const q = `
-		INSERT INTO models (provider_id, organization_id, name, display_name, context_window, output_limit, modalities, is_active)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, COALESCE($8, true))
+		INSERT INTO models (provider_id, organization_id, name, display_name, context_window, output_limit, modalities, reasoning_options, is_active)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, COALESCE($9, true))
 		RETURNING id`
 	var id int64
 	err := r.pool.QueryRow(ctx, q,
@@ -38,6 +38,7 @@ func (r *ModelRepo) Create(ctx context.Context, m *domain.Model) (domain.ID, err
 		ptrToText(m.DisplayName), int4ToNullable(m.ContextWindow),
 		int4ToNullable(m.OutputLimit),
 		modalitiesToJSONB(m.Modalities),
+		modalitiesToJSONB(m.ReasoningEfforts),
 		m.IsActive,
 	).Scan(&id)
 	if err != nil {
@@ -100,7 +101,7 @@ func int4ToNullable(i *int) pgtype.Int4 {
 func (r *ModelRepo) ListAll(ctx context.Context, orgID domain.OrganizationID) ([]domain.Model, error) {
 	const q = `
 		SELECT id, provider_id, organization_id, name, display_name, context_window,
-		       output_limit, model_aliases, model_pricing, modalities, is_active, created_at, updated_at
+		       output_limit, model_aliases, model_pricing, modalities, reasoning_options, is_active, created_at, updated_at
 		FROM models
 		WHERE organization_id = $1
 		ORDER BY name`
@@ -125,7 +126,7 @@ func (r *ModelRepo) ListAll(ctx context.Context, orgID domain.OrganizationID) ([
 func (r *ModelRepo) GetByID(ctx context.Context, orgID domain.OrganizationID, id domain.ID) (*domain.Model, error) {
 	const q = `
 		SELECT id, provider_id, organization_id, name, display_name, context_window,
-		       output_limit, model_aliases, model_pricing, modalities, is_active, created_at, updated_at
+		       output_limit, model_aliases, model_pricing, modalities, reasoning_options, is_active, created_at, updated_at
 		FROM models
 		WHERE organization_id = $1 AND id = $2`
 	row := r.pool.QueryRow(ctx, q, int64(orgID), int64(id))
@@ -147,13 +148,15 @@ func (r *ModelRepo) Update(ctx context.Context, orgID domain.OrganizationID, m *
 	}
 	const q = `
 		UPDATE models
-		SET name = $3, display_name = $4, context_window = $5, output_limit = $6, modalities = $7, is_active = $8, updated_at = now()
+		SET name = $3, display_name = $4, context_window = $5, output_limit = $6, modalities = $7, reasoning_options = $8, is_active = $9, updated_at = now()
 		WHERE organization_id = $1 AND id = $2`
 	tag, err := r.pool.Exec(ctx, q,
 		int64(orgID), int64(m.ID), m.Name,
 		ptrToText(m.DisplayName), int4ToNullable(m.ContextWindow),
 		int4ToNullable(m.OutputLimit),
-		modalitiesToJSONB(m.Modalities), m.IsActive,
+		modalitiesToJSONB(m.Modalities),
+		modalitiesToJSONB(m.ReasoningEfforts),
+		m.IsActive,
 	)
 	if err != nil {
 		if isUniqueViolation(err) {
@@ -168,28 +171,31 @@ func (r *ModelRepo) Update(ctx context.Context, orgID domain.OrganizationID, m *
 }
 
 // BackfillSpecs preenche APENAS campos vazios de um modelo existente com os
-// valores do dicionário interno de especificações (issue #26, ADR-0015).
+// valores do catálogo models.dev (ADR-0015/0017).
 //
 // REGRA INVARIANTE garantida no PRÓPRIO SQL: COALESCE nunca sobrescreve
-// context_window/output_limit não-nulos; modalities só é escrito quando
-// ainda é '[]' (vazio). O WHERE restringe a linhas com algo a preencher —
-// RowsAffected > 0 significa que o modelo foi enriquecido de fato.
+// context_window/output_limit não-nulos; modalities/reasoning_options só
+// são escritos quando ainda são '[]' (vazio). O WHERE restringe a linhas
+// com algo a preencher — RowsAffected > 0 significa que o modelo foi
+// enriquecido de fato.
 //
 // Ponteiros nil = campo sem valor a oferecer (mantém o atual). Retorna
 // (false, nil) quando não havia nada a preencher.
-func (r *ModelRepo) BackfillSpecs(ctx context.Context, orgID domain.OrganizationID, id domain.ID, contextWindow, outputLimit *int, modalities []string) (bool, error) {
+func (r *ModelRepo) BackfillSpecs(ctx context.Context, orgID domain.OrganizationID, id domain.ID, contextWindow, outputLimit *int, modalities, reasoningEfforts []string) (bool, error) {
 	const q = `
 		UPDATE models
-		SET context_window = COALESCE(context_window, $3),
-		    output_limit   = COALESCE(output_limit, $4),
-		    modalities     = CASE WHEN modalities = '[]'::jsonb THEN $5::jsonb ELSE modalities END,
-		    updated_at     = now()
+		SET context_window   = COALESCE(context_window, $3),
+		    output_limit     = COALESCE(output_limit, $4),
+		    modalities       = CASE WHEN modalities = '[]'::jsonb THEN $5::jsonb ELSE modalities END,
+		    reasoning_options = CASE WHEN reasoning_options = '[]'::jsonb THEN $6::jsonb ELSE reasoning_options END,
+		    updated_at       = now()
 		WHERE organization_id = $1 AND id = $2
-		  AND (context_window IS NULL OR output_limit IS NULL OR modalities = '[]'::jsonb)`
+		  AND (context_window IS NULL OR output_limit IS NULL OR modalities = '[]'::jsonb OR reasoning_options = '[]'::jsonb)`
 	tag, err := r.pool.Exec(ctx, q,
 		int64(orgID), int64(id),
 		int4ToNullable(contextWindow), int4ToNullable(outputLimit),
 		modalitiesToJSONB(modalities),
+		modalitiesToJSONB(reasoningEfforts),
 	)
 	if err != nil {
 		return false, fmt.Errorf("ModelRepo.BackfillSpecs: %w", err)
@@ -227,6 +233,7 @@ func (r *ModelRepo) Delete(ctx context.Context, orgID domain.OrganizationID, id 
 }
 
 // modalitiesToJSONB converte []string para JSONB. slice vazio → '[]'.
+// Reutilizado para reasoning_options (mesma forma de serialização).
 func modalitiesToJSONB(mods []string) []byte {
 	if len(mods) == 0 {
 		return []byte("[]")
@@ -235,7 +242,8 @@ func modalitiesToJSONB(mods []string) []byte {
 	return b
 }
 
-// scanModel mapeia coluna→domain.Model. modalities JSONB é parseado para []string.
+// scanModel mapeia coluna→domain.Model. modalities/reasoning_options JSONB
+// são parseados para []string.
 func scanModel(row pgx.Row) (*domain.Model, error) {
 	var (
 		m           domain.Model
@@ -247,10 +255,11 @@ func scanModel(row pgx.Row) (*domain.Model, error) {
 		_aliases    []byte
 		_pricing    []byte
 		modalitiesB []byte
+		reasoningB  []byte
 	)
 	err := row.Scan(
 		&m.ID, &providerID, &orgID, &m.Name, &displayName, &ctxWindow,
-		&outLimit, &_aliases, &_pricing, &modalitiesB, &m.IsActive, &m.CreatedAt, &m.UpdatedAt,
+		&outLimit, &_aliases, &_pricing, &modalitiesB, &reasoningB, &m.IsActive, &m.CreatedAt, &m.UpdatedAt,
 	)
 	if err != nil {
 		return nil, err
@@ -268,6 +277,9 @@ func scanModel(row pgx.Row) (*domain.Model, error) {
 	}
 	if len(modalitiesB) > 0 && string(modalitiesB) != "[]" {
 		_ = json.Unmarshal(modalitiesB, &m.Modalities)
+	}
+	if len(reasoningB) > 0 && string(reasoningB) != "[]" {
+		_ = json.Unmarshal(reasoningB, &m.ReasoningEfforts)
 	}
 	return &m, nil
 }

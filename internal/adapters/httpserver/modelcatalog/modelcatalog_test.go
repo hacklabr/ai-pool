@@ -67,6 +67,52 @@ func TestOpenCodeModelsMap(t *testing.T) {
 	}
 }
 
+// TestOpenCodeModelsMap_Variants: modelos com ReasoningEfforts ganham
+// "reasoning": true + uma variant por nível (reasoningEffort) — as
+// "variações" do modelo (ADR-0017). Sem efforts → sem os blocos.
+func TestOpenCodeModelsMap_Variants(t *testing.T) {
+	models := []domain.Model{
+		{Name: "kimi-k3", ReasoningEfforts: []string{"low", "high", "max"}, IsActive: true},
+		{Name: "glm-4.5", IsActive: true},
+	}
+
+	out := OpenCodeModelsMap(models)
+	if len(out) != 2 {
+		t.Fatalf("len = %d, want 2", len(out))
+	}
+
+	k3 := out["kimi-k3"].(map[string]any)
+	if k3["reasoning"] != true {
+		t.Errorf("kimi-k3 reasoning = %v, want true", k3["reasoning"])
+	}
+	variants, ok := k3["variants"].(map[string]any)
+	if !ok {
+		t.Fatalf("kimi-k3 variants missing: %+v", k3)
+	}
+	if len(variants) != 3 {
+		t.Errorf("variants = %d, want 3 (low/high/max)", len(variants))
+	}
+	for _, effort := range []string{"low", "high", "max"} {
+		v, ok := variants[effort].(map[string]any)
+		if !ok {
+			t.Errorf("variant %q missing: %+v", effort, variants)
+			continue
+		}
+		opts := v["options"].(map[string]any)
+		if opts["reasoningEffort"] != effort {
+			t.Errorf("variant %q reasoningEffort = %v, want %q", effort, opts["reasoningEffort"], effort)
+		}
+	}
+
+	glm := out["glm-4.5"].(map[string]any)
+	if _, ok := glm["reasoning"]; ok {
+		t.Error("glm-4.5 (sem efforts) não deve ter 'reasoning'")
+	}
+	if _, ok := glm["variants"]; ok {
+		t.Error("glm-4.5 (sem efforts) não deve ter 'variants'")
+	}
+}
+
 // TestOpenCodeModelsMap_Empty: entrada vazia → mapa vazio (nunca nil no JSON).
 func TestOpenCodeModelsMap_Empty(t *testing.T) {
 	out := OpenCodeModelsMap(nil)

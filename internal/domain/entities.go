@@ -203,9 +203,13 @@ type Model struct {
 	// OpenCode e para calibrar max_tokens nos requests. Nullable.
 	OutputLimit *int     // tokens de saída por resposta
 	Modalities  []string // ex.: ["text","image"] — vazio = texto apenas
-	IsActive    bool
-	CreatedAt   time.Time
-	UpdatedAt   time.Time
+	// ReasoningEfforts são os níveis de reasoning effort suportados pelo
+	// modelo (ex.: ["low","high","max"]), expostos ao OpenCode como variants
+	// (reasoningEffort). Fonte: models.dev (ADR-0017). Vazio = sem seletor.
+	ReasoningEfforts []string
+	IsActive         bool
+	CreatedAt        time.Time
+	UpdatedAt        time.Time
 }
 
 // IsMultimodal retorna true se o modelo aceita imagem como entrada.

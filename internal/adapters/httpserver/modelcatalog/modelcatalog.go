@@ -14,7 +14,8 @@ import (
 // OpenCodeModelsMap converte modelos para o schema esperado pelo OpenCode
 // (provider.{id}.models.{model}):
 //
-//	{ "<model-name>": { "name": <display>, "modalities"?: {...}, "limit": {...} } }
+//	{ "<model-name>": { "name": <display>, "modalities"?: {...}, "limit": {...},
+//	                    "reasoning"?: true, "variants"?: {...} } }
 //
 // Apenas modelos ativos entram no mapa. Modelos multimodais incluem o bloco
 // "modalities" no formato esperado pelo @ai-sdk/openai-compatible.
@@ -27,6 +28,13 @@ import (
 // schema, não verdades sobre o modelo:
 //   - context: DefaultContextWindow (128K)
 //   - output:  DefaultOutputLimit (32K)
+//
+// Variações de reasoning effort (low/high/max — ADR-0017): modelos com
+// ReasoningEfforts preenchidos ganham "reasoning": true e um bloco
+// "variants" com uma variante por nível ("options": {"reasoningEffort": X}).
+// O OpenCode envia o effort como parâmetro reasoning_effort do request — o
+// proxy NÃO precisa reescrever o body (ids sintéticos glm-5.3-max ficariam
+// no caminho quente e violariam a regra de bytes originais).
 //
 // Chave do mapa = Model.Name. Se houver nomes repetidos na entrada, a ÚLTIMA
 // ocorrência vence — callers que precisam de precedência (ex.: "primeiro
@@ -69,6 +77,20 @@ func OpenCodeModelsMap(models []domain.Model) map[string]any {
 			output = *m.OutputLimit
 		}
 		model["limit"] = map[string]any{"context": context, "output": output}
+
+		// Variações de effort (ADR-0017): uma variant por nível suportado.
+		// O OpenCode alterna entre elas no picker (keybind variant_cycle)
+		// e envia como reasoningEffort no request.
+		if len(m.ReasoningEfforts) > 0 {
+			model["reasoning"] = true
+			variants := make(map[string]any, len(m.ReasoningEfforts))
+			for _, e := range m.ReasoningEfforts {
+				variants[e] = map[string]any{
+					"options": map[string]any{"reasoningEffort": e},
+				}
+			}
+			model["variants"] = variants
+		}
 		out[m.Name] = model
 	}
 	return out

@@ -1,17 +1,18 @@
 // Package modelsync sincroniza o catálogo local de modelos (tabela models)
 // com a listagem exposta por cada provedor (GET {base_url}/models, formato
-// OpenAI). RF-11, ADR-0015.
+// OpenAI). RF-11, ADR-0015/0017.
 //
 // Princípios (ADR-0015):
 //   - FAIL-SAFE: provedor indisponível/sem chave usável/resposta inválida →
 //     NENHUMA alteração nos modelos daquele provedor (log sanitizado).
 //   - Reconciliação não-destrutiva: adiciona novos (ativos), reativa os que
 //     retornaram, DESATIVA os ausentes. NUNCA deleta linhas; NUNCA altera
-//     context_window/output_limit/modalities/pricing/aliases PREENCHIDOS de
-//     existentes (enriquecimento manual é protegido). Exceção controlada
-//     (issue #26): com um SpecSource injetado, campos VAZIOS de existentes
-//     recebem backfill do dicionário interno — só nulo/vazio, nunca
-//     sobrescreve (BackfillSpecs garante a invariante no SQL).
+//     context_window/output_limit/modalities/reasoning_options/pricing/
+//     aliases PREENCHIDOS de existentes (enriquecimento manual é protegido).
+//     Exceção controlada (issue #26, ADR-0017): com um SpecSource injetado
+//     (catálogo models.dev), campos VAZIOS de existentes recebem backfill —
+//     só nulo/vazio, nunca sobrescreve (BackfillSpecs garante a invariante
+//     no SQL).
 //   - O pacote vive FORA do domain (que continua PURO): declara portas
 //     mínimas consumer-side, satisfeitas pelos adapters postgres/crypto.
 //
@@ -31,7 +32,7 @@ import (
 	"time"
 
 	"github.com/hacklabr/ai-pool/internal/domain"
-	"github.com/hacklabr/ai-pool/internal/modelregistry"
+	"github.com/hacklabr/ai-pool/internal/modelsdev"
 )
 
 // defaultProviderTimeout é o tempo máximo da chamada GET /models por provedor.
@@ -65,14 +66,15 @@ type ModelStore interface {
 	SetActive(ctx context.Context, orgID domain.OrganizationID, id domain.ID, active bool) error
 	// BackfillSpecs preenche APENAS campos vazios (issue #26): nunca
 	// sobrescreve valores existentes (invariante do adapter postgres).
-	BackfillSpecs(ctx context.Context, orgID domain.OrganizationID, id domain.ID, contextWindow, outputLimit *int, modalities []string) (bool, error)
+	BackfillSpecs(ctx context.Context, orgID domain.OrganizationID, id domain.ID, contextWindow, outputLimit *int, modalities, reasoningEfforts []string) (bool, error)
 }
 
-// SpecSource é a porta consumer-side do dicionário interno de especificações
-// (issue #26). Satisfeita por *modelregistry.Registry; nil = comportamento
-// anterior ao dicionário (modelos nascem só com o nome, sem backfill).
+// SpecSource é a porta consumer-side do catálogo público de especificações
+// (models.dev, ADR-0017). Satisfeita por *modelsdev.SpecIndex; nil =
+// comportamento anterior ao catálogo (modelos nascem só com o nome, sem
+// backfill).
 type SpecSource interface {
-	Lookup(name string) (modelregistry.Spec, bool)
+	Lookup(name string) (modelsdev.Spec, bool)
 }
 
 // =============================================================================
@@ -144,10 +146,10 @@ type Syncer struct {
 	client    *http.Client
 	logger    *slog.Logger
 	orgID     domain.OrganizationID
-	// registry é o dicionário interno de specs (issue #26); nil = modelos
-	// nascem só com o nome e existentes não recebem backfill (comportamento
-	// anterior). Injetado via SetSpecSource (o mesmo *Registry serve job,
-	// CLI --sync-models e botão admin).
+	// registry é o catálogo público de specs (models.dev, ADR-0017); nil =
+	// modelos nascem só com o nome e existentes não recebem backfill
+	// (comportamento anterior). Injetado via SetSpecSource (o mesmo índice
+	// serve job, CLI --sync-models e botão admin).
 	registry SpecSource
 	// providerTimeout limita o GET /models de cada provedor (default 30s).
 	providerTimeout time.Duration
@@ -177,9 +179,10 @@ func NewSyncer(
 	}
 }
 
-// SetSpecSource injeta o dicionário interno de especificações (issue #26).
-// Opcional: sem chamada (ou fonte nil), o sync comporta-se como antes do
-// dicionário. Deve ser chamado antes do primeiro SyncAll (wiring no main).
+// SetSpecSource injeta o catálogo público de especificações (models.dev,
+// ADR-0017). Opcional: sem chamada (ou fonte nil), o sync comporta-se como
+// antes do catálogo. Deve ser chamado antes do primeiro SyncAll (wiring no
+// main).
 func (s *Syncer) SetSpecSource(src SpecSource) *Syncer {
 	s.registry = src
 	return s
@@ -378,13 +381,15 @@ func (s *Syncer) reconcile(ctx context.Context, p domain.Provider, upstreamIDs [
 				DisplayName: &displayName,
 				IsActive:    true,
 			}
-			// Issue #26: modelo presente no dicionário nasce configurado.
+			// Issue #26/ADR-0017: modelo presente no catálogo nasce
+			// configurado.
 			if s.registry != nil {
 				if spec, ok := s.registry.Lookup(id); ok {
 					cw, ol := spec.ContextWindow, spec.OutputLimit
 					newModel.ContextWindow = &cw
 					newModel.OutputLimit = &ol
 					newModel.Modalities = spec.Modalities
+					newModel.ReasoningEfforts = spec.ReasoningEffort
 				}
 			}
 			_, err := s.models.Create(ctx, &newModel)
@@ -434,9 +439,10 @@ func (s *Syncer) reconcile(ctx context.Context, p domain.Provider, upstreamIDs [
 }
 
 // backfillSpecs preenche campos VAZIOS de um modelo existente com a spec do
-// dicionário (issue #26). Regra invariante (ADR-0015): valor existente
-// (manual ou de sync anterior) NUNCA é sobrescrito — só campos nulos/vazios
-// são oferecidos ao repo, e o adapter garante a semântica no SQL.
+// catálogo models.dev (issue #26, ADR-0017). Regra invariante (ADR-0015):
+// valor existente (manual ou de sync anterior) NUNCA é sobrescrito — só
+// campos nulos/vazios são oferecidos ao repo, e o adapter garante a
+// semântica no SQL.
 func (s *Syncer) backfillSpecs(ctx context.Context, p domain.Provider, m domain.Model, rep *ProviderReport) {
 	if s.registry == nil {
 		return
@@ -459,10 +465,14 @@ func (s *Syncer) backfillSpecs(ctx context.Context, p domain.Provider, m domain.
 	if len(m.Modalities) == 0 {
 		modalities = spec.Modalities
 	}
-	if cw == nil && ol == nil && modalities == nil {
+	var efforts []string
+	if len(m.ReasoningEfforts) == 0 {
+		efforts = spec.ReasoningEffort
+	}
+	if cw == nil && ol == nil && modalities == nil && efforts == nil {
 		return // nada a preencher (modelo já configurado)
 	}
-	enriched, err := s.models.BackfillSpecs(ctx, s.orgID, m.ID, cw, ol, modalities)
+	enriched, err := s.models.BackfillSpecs(ctx, s.orgID, m.ID, cw, ol, modalities, efforts)
 	if err != nil {
 		// Falha pontual de DB: loga e segue — o próximo tick tenta de novo.
 		s.logger.Warn("model sync: backfill specs failed",

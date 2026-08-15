@@ -151,12 +151,19 @@ golang-migrate · Helm chart com PostgreSQL embutido · imagem distroless nonroo
 - Intervalo via env `AIPP_MODEL_SYNC_INTERVAL` (Go duration, default 6h;
   `0` desativa o job periódico). Sync inicial assíncrono no boot (fail-open,
   nunca bloqueia readiness).
-- **Dicionário interno de especificações** (issue #26, `internal/modelregistry/`):
-  `specs.json` embutido no binário (embed.FS, zero dependências) com
-  `context_window`/`output_limit`/`modalities` por modelo — nome canônico +
-  aliases com override parcial, dados validados nas docs oficiais dos
-  provedores. Modelo novo presente no dicionário nasce já configurado;
-  existente com campo vazio recebe backfill (`ModelRepo.BackfillSpecs`).
+- **Catálogo público de especificações** (ADR-0017, `internal/modelsdev/`):
+  fetch de `https://models.dev/api.json` (mesma fonte que o OpenCode usa)
+  1x por rodada de sync, com `context_window`/`output_limit`/`modalities`/
+  `reasoning_options` por model-id — lookup global com prioridade para
+  provedores de primeira parte (zai/kimi/moonshotai). Modelo novo presente
+  no catálogo nasce já configurado; existente com campo vazio recebe
+  backfill (`ModelRepo.BackfillSpecs`). Fetch indisponível → sync segue sem
+  enriquecimento (fail-safe; próximo tick tenta de novo).
+- **Variações de reasoning effort** (ADR-0017): `reasoning_options`
+  persistido em `models.reasoning_options jsonb` (ex.: `["low","high","max"]`)
+  e exposto ao OpenCode como `variants` com `reasoningEffort` — o cliente
+  envia como parâmetro `reasoning_effort` do request; o proxy permanece
+  byte-passthrough (sem IDs sintéticos).
 - A invariante ADR-0015 vale também para o dicionário: **só preenche campo
   vazio (nulo), nunca sobrescreve** (garantida no próprio SQL via
   `COALESCE`/`CASE`). O relatório de sync contabiliza `enriched` por provedor
