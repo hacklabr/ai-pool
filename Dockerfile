@@ -23,8 +23,8 @@
 # =============================================================================
 
 # === Stage 1: Builder ===
-# Versão pinada conforme go.mod (go 1.26.5).
-FROM golang:1.26.5-alpine AS builder
+# Versão pinada conforme go.mod (go 1.26.6).
+FROM golang:1.26.6-alpine AS builder
 
 # git é necessário para operações de VCS no toolchain Go; ca-certificates
 # para HTTPS em `go mod download`.

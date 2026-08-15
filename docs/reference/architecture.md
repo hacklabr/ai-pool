@@ -202,7 +202,7 @@ dashboard/"meu uso" ver dados recentes).
 
 ## 6. Deploy
 
-- **Dockerfile multi-stage:** builder `golang:1.26.5-alpine` (cache de `go mod download`,
+- **Dockerfile multi-stage:** builder `golang:1.26.6-alpine` (cache de `go mod download`,
   `CGO_ENABLED=0`, `-trimpath -ldflags "-s -w"`) → runtime `gcr.io/distroless/base-debian12:nonroot`
   (UID 65532, CA roots para HTTPS aos provedores — deliberadamente não é `static`). Migrations e
   assets web vão embutidos via `//go:embed` — nenhum arquivo solto na imagem.
