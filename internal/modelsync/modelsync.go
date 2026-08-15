@@ -7,8 +7,11 @@
 //     NENHUMA alteração nos modelos daquele provedor (log sanitizado).
 //   - Reconciliação não-destrutiva: adiciona novos (ativos), reativa os que
 //     retornaram, DESATIVA os ausentes. NUNCA deleta linhas; NUNCA altera
-//     context_window/output_limit/modalities/pricing/aliases de existentes
-//     (enriquecimento manual é protegido).
+//     context_window/output_limit/modalities/pricing/aliases PREENCHIDOS de
+//     existentes (enriquecimento manual é protegido). Exceção controlada
+//     (issue #26): com um SpecSource injetado, campos VAZIOS de existentes
+//     recebem backfill do dicionário interno — só nulo/vazio, nunca
+//     sobrescreve (BackfillSpecs garante a invariante no SQL).
 //   - O pacote vive FORA do domain (que continua PURO): declara portas
 //     mínimas consumer-side, satisfeitas pelos adapters postgres/crypto.
 //
@@ -28,6 +31,7 @@ import (
 	"time"
 
 	"github.com/hacklabr/ai-pool/internal/domain"
+	"github.com/hacklabr/ai-pool/internal/modelregistry"
 )
 
 // defaultProviderTimeout é o tempo máximo da chamada GET /models por provedor.
@@ -54,11 +58,21 @@ type KeyLister interface {
 }
 
 // ModelStore lê e reconcilia o catálogo local de modelos.
-// Satisfeita por postgres.ModelRepo (ListAll/Create/SetActive).
+// Satisfeita por postgres.ModelRepo (ListAll/Create/SetActive/BackfillSpecs).
 type ModelStore interface {
 	ListAll(ctx context.Context, orgID domain.OrganizationID) ([]domain.Model, error)
 	Create(ctx context.Context, m *domain.Model) (domain.ID, error)
 	SetActive(ctx context.Context, orgID domain.OrganizationID, id domain.ID, active bool) error
+	// BackfillSpecs preenche APENAS campos vazios (issue #26): nunca
+	// sobrescreve valores existentes (invariante do adapter postgres).
+	BackfillSpecs(ctx context.Context, orgID domain.OrganizationID, id domain.ID, contextWindow, outputLimit *int, modalities []string) (bool, error)
+}
+
+// SpecSource é a porta consumer-side do dicionário interno de especificações
+// (issue #26). Satisfeita por *modelregistry.Registry; nil = comportamento
+// anterior ao dicionário (modelos nascem só com o nome, sem backfill).
+type SpecSource interface {
+	Lookup(name string) (modelregistry.Spec, bool)
 }
 
 // =============================================================================
@@ -71,6 +85,9 @@ type ProviderReport struct {
 	Added        []string // modelos criados (ativos)
 	Reactivated  []string // modelos que voltaram ao upstream e foram reativados
 	Deactivated  []string // modelos locais ausentes no upstream, desativados
+	// Enriched: modelos existentes que ganharam backfill do dicionário
+	// interno de specs (issue #26) — campos vazios preenchidos.
+	Enriched []string
 	// Skipped=true quando o provedor não pôde ser consultado (fail-safe):
 	// nenhuma alteração foi feita nos modelos dele; SkipReason traz o motivo.
 	Skipped    bool
@@ -82,17 +99,18 @@ type Report struct {
 	Providers []ProviderReport
 }
 
-// Totals soma added/reactivated/deactivated/skipped de todos os provedores.
-func (r *Report) Totals() (added, reactivated, deactivated, skipped int) {
+// Totals soma added/reactivated/deactivated/enriched/skipped de todos os provedores.
+func (r *Report) Totals() (added, reactivated, deactivated, enriched, skipped int) {
 	for _, p := range r.Providers {
 		added += len(p.Added)
 		reactivated += len(p.Reactivated)
 		deactivated += len(p.Deactivated)
+		enriched += len(p.Enriched)
 		if p.Skipped {
 			skipped++
 		}
 	}
-	return added, reactivated, deactivated, skipped
+	return added, reactivated, deactivated, enriched, skipped
 }
 
 // String formata o relatório para saída humana (CLI).
@@ -107,8 +125,8 @@ func (r *Report) String() string {
 			fmt.Fprintf(&b, "provider %s: skipped (%s)\n", p.ProviderSlug, p.SkipReason)
 			continue
 		}
-		fmt.Fprintf(&b, "provider %s: added=%d reactivated=%d deactivated=%d\n",
-			p.ProviderSlug, len(p.Added), len(p.Reactivated), len(p.Deactivated))
+		fmt.Fprintf(&b, "provider %s: added=%d reactivated=%d deactivated=%d enriched=%d\n",
+			p.ProviderSlug, len(p.Added), len(p.Reactivated), len(p.Deactivated), len(p.Enriched))
 	}
 	return b.String()
 }
@@ -126,6 +144,11 @@ type Syncer struct {
 	client    *http.Client
 	logger    *slog.Logger
 	orgID     domain.OrganizationID
+	// registry é o dicionário interno de specs (issue #26); nil = modelos
+	// nascem só com o nome e existentes não recebem backfill (comportamento
+	// anterior). Injetado via SetSpecSource (o mesmo *Registry serve job,
+	// CLI --sync-models e botão admin).
+	registry SpecSource
 	// providerTimeout limita o GET /models de cada provedor (default 30s).
 	providerTimeout time.Duration
 }
@@ -154,6 +177,14 @@ func NewSyncer(
 	}
 }
 
+// SetSpecSource injeta o dicionário interno de especificações (issue #26).
+// Opcional: sem chamada (ou fonte nil), o sync comporta-se como antes do
+// dicionário. Deve ser chamado antes do primeiro SyncAll (wiring no main).
+func (s *Syncer) SetSpecSource(src SpecSource) *Syncer {
+	s.registry = src
+	return s
+}
+
 // SyncAll executa uma rodada completa de sincronização.
 //
 // Retorna erro APENAS em falha estrutural (DB indisponível ao listar
@@ -180,12 +211,13 @@ func (s *Syncer) SyncAll(ctx context.Context) (*Report, error) {
 		report.Providers = append(report.Providers, s.syncProvider(ctx, p, localByProvider[p.ID]))
 	}
 
-	added, reactivated, deactivated, skipped := report.Totals()
+	added, reactivated, deactivated, enriched, skipped := report.Totals()
 	s.logger.Info("model sync completed",
 		"providers", len(providers),
 		"added", added,
 		"reactivated", reactivated,
 		"deactivated", deactivated,
+		"enriched", enriched,
 		"skipped", skipped,
 	)
 	return report, nil
@@ -289,12 +321,17 @@ func (s *Syncer) fetchModelIDs(ctx context.Context, baseURL, bearerToken string)
 
 // reconcile aplica a diferença upstream × catálogo local (provedor OK):
 //   - id existe e inativo     → SetActive(true)  (reactivated)
-//   - id não existe           → Create (Name=id, DisplayName=id, IsActive=true,
-//     demais campos nulos/default) (added)
+//   - id não existe           → Create (Name=id, DisplayName=id, IsActive=true;
+//     com registry configurado e spec disponível, nasce JÁ com
+//     context_window/output_limit/modalities do dicionário — issue #26) (added)
+//   - id existe               → backfill: campos VAZIOS preenchidos com a spec
+//     do dicionário, se disponível (enriched). Valores existentes NUNCA são
+//     tocados (BackfillSpecs garante no SQL).
 //   - modelo local ausente no upstream e ativo → SetActive(false) (deactivated)
 //
-// NUNCA deleta; NUNCA altera ContextWindow/OutputLimit/Modalities/pricing/
-// aliases de modelos existentes (enriquecimento manual preservado, ADR-0015).
+// NUNCA deleta; NUNCA sobrescreve ContextWindow/OutputLimit/Modalities/
+// pricing/aliases de modelos existentes (enriquecimento manual preservado,
+// ADR-0015 — o dicionário só preenche campo vazio).
 func (s *Syncer) reconcile(ctx context.Context, p domain.Provider, upstreamIDs []string, local []domain.Model, rep ProviderReport) ProviderReport {
 	localByName := make(map[string]domain.Model, len(local))
 	for _, m := range local {
@@ -312,13 +349,23 @@ func (s *Syncer) reconcile(ctx context.Context, p domain.Provider, upstreamIDs [
 		switch {
 		case !exists:
 			displayName := id
-			_, err := s.models.Create(ctx, &domain.Model{
+			newModel := domain.Model{
 				ProviderID:  p.ID,
 				OrgID:       s.orgID,
 				Name:        id,
 				DisplayName: &displayName,
 				IsActive:    true,
-			})
+			}
+			// Issue #26: modelo presente no dicionário nasce configurado.
+			if s.registry != nil {
+				if spec, ok := s.registry.Lookup(id); ok {
+					cw, ol := spec.ContextWindow, spec.OutputLimit
+					newModel.ContextWindow = &cw
+					newModel.OutputLimit = &ol
+					newModel.Modalities = spec.Modalities
+				}
+			}
+			_, err := s.models.Create(ctx, &newModel)
 			if err != nil {
 				// Ex.: unique violation em race com outro sync — benigno; o
 				// próximo tick reconcilia. Não interrompe a rodada.
@@ -334,8 +381,12 @@ func (s *Syncer) reconcile(ctx context.Context, p domain.Provider, upstreamIDs [
 				continue
 			}
 			rep.Reactivated = append(rep.Reactivated, id)
+			s.backfillSpecs(ctx, p, lm, &rep)
+		default:
+			// exists && IsActive → inalterado pelo reconcile base; tenta
+			// apenas o backfill do dicionário (no-op se nada a preencher).
+			s.backfillSpecs(ctx, p, lm, &rep)
 		}
-		// exists && IsActive → inalterado (nada a fazer).
 	}
 
 	for _, m := range local {
@@ -355,6 +406,48 @@ func (s *Syncer) reconcile(ctx context.Context, p domain.Provider, upstreamIDs [
 		"added", len(rep.Added),
 		"reactivated", len(rep.Reactivated),
 		"deactivated", len(rep.Deactivated),
+		"enriched", len(rep.Enriched),
 	)
 	return rep
+}
+
+// backfillSpecs preenche campos VAZIOS de um modelo existente com a spec do
+// dicionário (issue #26). Regra invariante (ADR-0015): valor existente
+// (manual ou de sync anterior) NUNCA é sobrescrito — só campos nulos/vazios
+// são oferecidos ao repo, e o adapter garante a semântica no SQL.
+func (s *Syncer) backfillSpecs(ctx context.Context, p domain.Provider, m domain.Model, rep *ProviderReport) {
+	if s.registry == nil {
+		return
+	}
+	spec, ok := s.registry.Lookup(m.Name)
+	if !ok {
+		return
+	}
+	// Oferece apenas o que está vazio no modelo local.
+	var cw, ol *int
+	if m.ContextWindow == nil {
+		c := spec.ContextWindow
+		cw = &c
+	}
+	if m.OutputLimit == nil {
+		o := spec.OutputLimit
+		ol = &o
+	}
+	var modalities []string
+	if len(m.Modalities) == 0 {
+		modalities = spec.Modalities
+	}
+	if cw == nil && ol == nil && modalities == nil {
+		return // nada a preencher (modelo já configurado)
+	}
+	enriched, err := s.models.BackfillSpecs(ctx, s.orgID, m.ID, cw, ol, modalities)
+	if err != nil {
+		// Falha pontual de DB: loga e segue — o próximo tick tenta de novo.
+		s.logger.Warn("model sync: backfill specs failed",
+			"provider", p.Slug, "model", m.Name, "err", err)
+		return
+	}
+	if enriched {
+		rep.Enriched = append(rep.Enriched, m.Name)
+	}
 }

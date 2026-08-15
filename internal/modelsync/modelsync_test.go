@@ -12,6 +12,7 @@ import (
 	"testing"
 
 	"github.com/hacklabr/ai-pool/internal/domain"
+	"github.com/hacklabr/ai-pool/internal/modelregistry"
 )
 
 // =============================================================================
@@ -60,12 +61,25 @@ type setActiveCall struct {
 	active bool
 }
 
+// backfillCall registra chamadas de BackfillSpecs (issue #26).
+type backfillCall struct {
+	id            domain.ID
+	contextWindow *int
+	outputLimit   *int
+	modalities    []string
+}
+
 type fakeModelStore struct {
-	models    []domain.Model
-	created   []domain.Model
-	setActive []setActiveCall
-	createErr error
-	listErr   error
+	models      []domain.Model
+	created     []domain.Model
+	setActive   []setActiveCall
+	backfills   []backfillCall
+	createErr   error
+	listErr     error
+	backfillErr error
+	// backfillResult controla o retorno "enriched" do BackfillSpecs
+	// (default false — o repo real retorna true quando preencheu algo).
+	backfillResult bool
 }
 
 func (f *fakeModelStore) ListAll(_ context.Context, _ domain.OrganizationID) ([]domain.Model, error) {
@@ -86,6 +100,16 @@ func (f *fakeModelStore) Create(_ context.Context, m *domain.Model) (domain.ID, 
 func (f *fakeModelStore) SetActive(_ context.Context, _ domain.OrganizationID, id domain.ID, active bool) error {
 	f.setActive = append(f.setActive, setActiveCall{id: id, active: active})
 	return nil
+}
+
+func (f *fakeModelStore) BackfillSpecs(_ context.Context, _ domain.OrganizationID, id domain.ID, contextWindow, outputLimit *int, modalities []string) (bool, error) {
+	f.backfills = append(f.backfills, backfillCall{
+		id:            id,
+		contextWindow: contextWindow,
+		outputLimit:   outputLimit,
+		modalities:    append([]string(nil), modalities...),
+	})
+	return f.backfillResult, f.backfillErr
 }
 
 // --- Helpers ---
@@ -474,5 +498,260 @@ func TestReport_String(t *testing.T) {
 	empty := &Report{}
 	if got := empty.String(); !strings.Contains(got, "nothing to do") {
 		t.Errorf("empty report string = %q, want 'nothing to do'", got)
+	}
+}
+
+// --- Enriquecimento via dicionário interno de specs (issue #26) ---
+
+// intPtr helper para asserts de campos *int.
+func intPtr(v int) *int { return &v }
+
+// mustTestRegistry carrega o dicionário EMBUTIDO real (dados validados).
+func mustTestRegistry(t *testing.T) *modelregistry.Registry {
+	t.Helper()
+	r, err := modelregistry.Default()
+	if err != nil {
+		t.Fatalf("modelregistry.Default() failed: %v", err)
+	}
+	return r
+}
+
+// enrichedModel monta um modelo local com campos seletivamente preenchidos
+// (nil = campo vazio, candidato a backfill).
+func enrichedModel(id, providerID domain.ID, name string, active bool, cw, ol *int, modalities []string) domain.Model {
+	m := localModel(id, providerID, name, active)
+	m.ContextWindow, m.OutputLimit, m.Modalities = cw, ol, modalities
+	return m
+}
+
+// TestSyncAll_EnrichmentWithRegistry valida o fluxo completo do dicionário
+// interno (issue #26) usando o specs.json embutido real:
+//   - modelo novo no dicionário nasce configurado (Create enriquecido);
+//   - existente com campos vazios recebe backfill (só dos campos vazios);
+//   - existente totalmente preenchido NÃO recebe backfill;
+//   - modelo fora do dicionário mantém comportamento atual;
+//   - relatório contabiliza enriched.
+func TestSyncAll_EnrichmentWithRegistry(t *testing.T) {
+	upstream := upstreamServer(t, 200,
+		`{"data":[{"id":"kimi-k3"},{"id":"glm-4.5"},{"id":"k3-256k"},{"id":"kimi-k2.7-code"},{"id":"unknown-model"}]}`, "")
+	defer upstream.Close()
+
+	provider := activeProvider(10, "testprov", upstream.URL+"/v1")
+	store := &fakeModelStore{
+		models: []domain.Model{
+			// vazio: backfill completo.
+			enrichedModel(1, 10, "glm-4.5", true, nil, nil, nil),
+			// tudo preenchido à mão: NENHUM backfill.
+			enrichedModel(2, 10, "k3-256k", true, intPtr(1111), intPtr(2222), []string{"text"}),
+			// só context_window manual: backfill de output_limit/modalities,
+			// context_window oferecido como nil (não sobrescreve).
+			enrichedModel(3, 10, "kimi-k2.7-code", true, intPtr(3333), nil, nil),
+		},
+		backfillResult: true,
+	}
+	syncer := newTestSyncer(
+		[]domain.Provider{provider},
+		map[domain.ID][]domain.ProviderKey{10: {usableKey(100, 10)}},
+		store,
+	).SetSpecSource(mustTestRegistry(t))
+
+	report, err := syncer.SyncAll(context.Background())
+	if err != nil {
+		t.Fatalf("SyncAll: %v", err)
+	}
+	rep := report.Providers[0]
+
+	// Criados: kimi-k3 (no dicionário, nasce configurado) e unknown-model
+	// (fora do dicionário, nasce só com nome — comportamento atual).
+	createdByName := map[string]domain.Model{}
+	for _, c := range store.created {
+		createdByName[c.Name] = c
+	}
+	if len(store.created) != 2 {
+		t.Fatalf("Create calls = %d, want 2 (kimi-k3, unknown-model)", len(store.created))
+	}
+	k3 := createdByName["kimi-k3"]
+	if k3.ContextWindow == nil || *k3.ContextWindow != 1048576 {
+		t.Errorf("created kimi-k3 ContextWindow = %v, want 1048576", k3.ContextWindow)
+	}
+	if k3.OutputLimit == nil || *k3.OutputLimit != 1048576 {
+		t.Errorf("created kimi-k3 OutputLimit = %v, want 1048576", k3.OutputLimit)
+	}
+	if !equalStrings(k3.Modalities, []string{"text", "image"}) {
+		t.Errorf("created kimi-k3 Modalities = %v, want [text image]", k3.Modalities)
+	}
+	unknown := createdByName["unknown-model"]
+	if unknown.ContextWindow != nil || unknown.OutputLimit != nil || len(unknown.Modalities) != 0 {
+		t.Errorf("created unknown-model must not carry enrichment fields: %+v", unknown)
+	}
+
+	// Backfills: glm-4.5 (completo) e kimi-k2.7-code (parcial); k3-256k não.
+	if len(store.backfills) != 2 {
+		t.Fatalf("BackfillSpecs calls = %d, want 2", len(store.backfills))
+	}
+	for _, call := range store.backfills {
+		switch call.id {
+		case 1: // glm-4.5 vazio → tudo oferecido
+			if call.contextWindow == nil || *call.contextWindow != 131072 {
+				t.Errorf("glm-4.5 backfill contextWindow = %v, want 131072", call.contextWindow)
+			}
+			if call.outputLimit == nil || *call.outputLimit != 98304 {
+				t.Errorf("glm-4.5 backfill outputLimit = %v, want 98304", call.outputLimit)
+			}
+			if !equalStrings(call.modalities, []string{"text"}) {
+				t.Errorf("glm-4.5 backfill modalities = %v, want [text]", call.modalities)
+			}
+		case 3: // kimi-k2.7-code: só o que está vazio
+			if call.contextWindow != nil {
+				t.Errorf("kimi-k2.7-code backfill must not offer contextWindow (manual 3333), got %v", *call.contextWindow)
+			}
+			if call.outputLimit == nil || *call.outputLimit != 32768 {
+				t.Errorf("kimi-k2.7-code backfill outputLimit = %v, want 32768", call.outputLimit)
+			}
+			if !equalStrings(call.modalities, []string{"text", "image"}) {
+				t.Errorf("kimi-k2.7-code backfill modalities = %v, want [text image]", call.modalities)
+			}
+		default:
+			t.Errorf("unexpected BackfillSpecs call for model id %d", call.id)
+		}
+	}
+
+	// Relatório contabiliza enriched.
+	if !equalStrings(rep.Enriched, []string{"glm-4.5", "kimi-k2.7-code"}) {
+		t.Errorf("enriched = %v, want [glm-4.5 kimi-k2.7-code]", rep.Enriched)
+	}
+	if _, _, _, enriched, _ := report.Totals(); enriched != 2 {
+		t.Errorf("totals enriched = %d, want 2", enriched)
+	}
+}
+
+// TestSyncAll_EnrichmentNilRegistry: SEM registry injetado o comportamento é
+// idêntico ao anterior (issue #26): nada de backfill, nada de Create
+// enriquecido — mesmo para modelos presentes no dicionário.
+func TestSyncAll_EnrichmentNilRegistry(t *testing.T) {
+	upstream := upstreamServer(t, 200, `{"data":[{"id":"glm-4.5"},{"id":"kimi-k3"}]}`, "")
+	defer upstream.Close()
+
+	provider := activeProvider(10, "testprov", upstream.URL+"/v1")
+	store := &fakeModelStore{
+		models:         []domain.Model{enrichedModel(1, 10, "glm-4.5", true, nil, nil, nil)},
+		backfillResult: true, // se chamasse, o teste falharia nos asserts abaixo
+	}
+	syncer := newTestSyncer(
+		[]domain.Provider{provider},
+		map[domain.ID][]domain.ProviderKey{10: {usableKey(100, 10)}},
+		store,
+	) // sem SetSpecSource
+
+	report, err := syncer.SyncAll(context.Background())
+	if err != nil {
+		t.Fatalf("SyncAll: %v", err)
+	}
+	if len(store.backfills) != 0 {
+		t.Errorf("BackfillSpecs calls = %d, want 0 without registry", len(store.backfills))
+	}
+	if len(store.created) != 1 {
+		t.Fatalf("Create calls = %d, want 1", len(store.created))
+	}
+	c := store.created[0]
+	if c.Name != "kimi-k3" || c.ContextWindow != nil || c.OutputLimit != nil || len(c.Modalities) != 0 {
+		t.Errorf("created model without registry must not carry enrichment: %+v", c)
+	}
+	if len(report.Providers[0].Enriched) != 0 {
+		t.Errorf("enriched = %v, want empty", report.Providers[0].Enriched)
+	}
+}
+
+// TestSyncAll_EnrichmentReactivatedInactive: modelo INATIVO presente no
+// upstream é reativado E recebe backfill (mesma rodada).
+func TestSyncAll_EnrichmentReactivatedInactive(t *testing.T) {
+	upstream := upstreamServer(t, 200, `{"data":[{"id":"glm-4.6"}]}`, "")
+	defer upstream.Close()
+
+	provider := activeProvider(10, "testprov", upstream.URL+"/v1")
+	store := &fakeModelStore{
+		models:         []domain.Model{enrichedModel(1, 10, "glm-4.6", false, nil, nil, nil)},
+		backfillResult: true,
+	}
+	syncer := newTestSyncer(
+		[]domain.Provider{provider},
+		map[domain.ID][]domain.ProviderKey{10: {usableKey(100, 10)}},
+		store,
+	).SetSpecSource(mustTestRegistry(t))
+
+	report, err := syncer.SyncAll(context.Background())
+	if err != nil {
+		t.Fatalf("SyncAll: %v", err)
+	}
+	rep := report.Providers[0]
+	if !equalStrings(rep.Reactivated, []string{"glm-4.6"}) {
+		t.Errorf("reactivated = %v, want [glm-4.6]", rep.Reactivated)
+	}
+	if !equalStrings(rep.Enriched, []string{"glm-4.6"}) {
+		t.Errorf("enriched = %v, want [glm-4.6]", rep.Enriched)
+	}
+}
+
+// TestSyncAll_EnrichmentAliasOverride: alias com override no dicionário
+// (k3-256k: contexto 262144) é aplicado no backfill do modelo listado sob o
+// nome do alias.
+func TestSyncAll_EnrichmentAliasOverride(t *testing.T) {
+	upstream := upstreamServer(t, 200, `{"data":[{"id":"k3-256k"}]}`, "")
+	defer upstream.Close()
+
+	provider := activeProvider(10, "testprov", upstream.URL+"/v1")
+	store := &fakeModelStore{
+		models:         []domain.Model{enrichedModel(1, 10, "k3-256k", true, nil, nil, nil)},
+		backfillResult: true,
+	}
+	syncer := newTestSyncer(
+		[]domain.Provider{provider},
+		map[domain.ID][]domain.ProviderKey{10: {usableKey(100, 10)}},
+		store,
+	).SetSpecSource(mustTestRegistry(t))
+
+	report, err := syncer.SyncAll(context.Background())
+	if err != nil {
+		t.Fatalf("SyncAll: %v", err)
+	}
+	if !equalStrings(report.Providers[0].Enriched, []string{"k3-256k"}) {
+		t.Fatalf("enriched = %v, want [k3-256k]", report.Providers[0].Enriched)
+	}
+	if len(store.backfills) != 1 {
+		t.Fatalf("BackfillSpecs calls = %d, want 1", len(store.backfills))
+	}
+	call := store.backfills[0]
+	if call.contextWindow == nil || *call.contextWindow != 262144 {
+		t.Errorf("k3-256k backfill contextWindow = %v, want 262144 (alias override)", call.contextWindow)
+	}
+	if call.outputLimit == nil || *call.outputLimit != 1048576 {
+		t.Errorf("k3-256k backfill outputLimit = %v, want 1048576 (herdado)", call.outputLimit)
+	}
+}
+
+// TestSyncAll_BackfillErrorIsNonFatal: erro de BackfillSpecs é pontual —
+// loga, não marca enriched e não aborta a rodada (demais efeitos ocorrem).
+func TestSyncAll_BackfillErrorIsNonFatal(t *testing.T) {
+	upstream := upstreamServer(t, 200, `{"data":[{"id":"glm-4.5"}]}`, "")
+	defer upstream.Close()
+
+	provider := activeProvider(10, "testprov", upstream.URL+"/v1")
+	store := &fakeModelStore{
+		models:         []domain.Model{enrichedModel(1, 10, "glm-4.5", true, nil, nil, nil)},
+		backfillErr:    errors.New("db down"),
+		backfillResult: true,
+	}
+	syncer := newTestSyncer(
+		[]domain.Provider{provider},
+		map[domain.ID][]domain.ProviderKey{10: {usableKey(100, 10)}},
+		store,
+	).SetSpecSource(mustTestRegistry(t))
+
+	report, err := syncer.SyncAll(context.Background())
+	if err != nil {
+		t.Fatalf("SyncAll must not fail on backfill error: %v", err)
+	}
+	if len(report.Providers[0].Enriched) != 0 {
+		t.Errorf("enriched = %v, want empty on backfill error", report.Providers[0].Enriched)
 	}
 }

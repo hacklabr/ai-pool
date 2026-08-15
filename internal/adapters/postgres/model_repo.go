@@ -167,6 +167,36 @@ func (r *ModelRepo) Update(ctx context.Context, orgID domain.OrganizationID, m *
 	return nil
 }
 
+// BackfillSpecs preenche APENAS campos vazios de um modelo existente com os
+// valores do dicionário interno de especificações (issue #26, ADR-0015).
+//
+// REGRA INVARIANTE garantida no PRÓPRIO SQL: COALESCE nunca sobrescreve
+// context_window/output_limit não-nulos; modalities só é escrito quando
+// ainda é '[]' (vazio). O WHERE restringe a linhas com algo a preencher —
+// RowsAffected > 0 significa que o modelo foi enriquecido de fato.
+//
+// Ponteiros nil = campo sem valor a oferecer (mantém o atual). Retorna
+// (false, nil) quando não havia nada a preencher.
+func (r *ModelRepo) BackfillSpecs(ctx context.Context, orgID domain.OrganizationID, id domain.ID, contextWindow, outputLimit *int, modalities []string) (bool, error) {
+	const q = `
+		UPDATE models
+		SET context_window = COALESCE(context_window, $3),
+		    output_limit   = COALESCE(output_limit, $4),
+		    modalities     = CASE WHEN modalities = '[]'::jsonb THEN $5::jsonb ELSE modalities END,
+		    updated_at     = now()
+		WHERE organization_id = $1 AND id = $2
+		  AND (context_window IS NULL OR output_limit IS NULL OR modalities = '[]'::jsonb)`
+	tag, err := r.pool.Exec(ctx, q,
+		int64(orgID), int64(id),
+		int4ToNullable(contextWindow), int4ToNullable(outputLimit),
+		modalitiesToJSONB(modalities),
+	)
+	if err != nil {
+		return false, fmt.Errorf("ModelRepo.BackfillSpecs: %w", err)
+	}
+	return tag.RowsAffected() > 0, nil
+}
+
 // SetActive ativa ou inativa um modelo.
 func (r *ModelRepo) SetActive(ctx context.Context, orgID domain.OrganizationID, id domain.ID, active bool) error {
 	const q = `

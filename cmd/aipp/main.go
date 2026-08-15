@@ -44,6 +44,7 @@ import (
 	"github.com/hacklabr/ai-pool/internal/adapters/store"
 	"github.com/hacklabr/ai-pool/internal/config"
 	"github.com/hacklabr/ai-pool/internal/domain"
+	"github.com/hacklabr/ai-pool/internal/modelregistry"
 	"github.com/hacklabr/ai-pool/internal/modelsync"
 	"github.com/hacklabr/ai-pool/internal/routing"
 	"github.com/hacklabr/ai-pool/internal/usage"
@@ -205,6 +206,16 @@ func main() {
 	// se o intervalo > 0) E o botão "Sincronizar agora" do admin (issue #25)
 	// — mesma instância, mesma configuração. Intervalo 0 = apenas job
 	// desativado (o botão e o CLI --sync-models continuam disponíveis).
+	//
+	// Dicionário interno de specs (issue #26): modelos presentes no
+	// dicionário nascem configurados e existentes com campo vazio recebem
+	// backfill (nunca sobrescreve). Erro no load é estrutural (embed
+	// corrompido) — fail-fast.
+	modelRegistry, err := modelregistry.Default()
+	if err != nil {
+		logger.Error("model registry: failed to load embedded specs", "err", err)
+		os.Exit(1)
+	}
 	var modelSyncJob *modelsync.Job
 	if pool != nil {
 		syncer := modelsync.NewSyncer(
@@ -215,7 +226,7 @@ func main() {
 			upstreamClient,
 			logger,
 			domain.OrganizationID(cfg.DefaultOrgID),
-		)
+		).SetSpecSource(modelRegistry)
 		if cfg.ModelSyncInterval > 0 {
 			modelSyncJob = modelsync.NewJob(syncer, cfg.ModelSyncInterval, logger)
 		}
@@ -542,6 +553,15 @@ func runSyncModels(cfg *config.Config, logger *slog.Logger) int {
 		decryptor = store.NewIdentityDecryptor()
 	}
 
+	// Dicionário interno de specs (issue #26): mesmo registry embutido do
+	// job/botão admin — modelos novos nascem configurados, existentes com
+	// campo vazio recebem backfill. Load falho é estrutural (exit 1).
+	modelRegistry, err := modelregistry.Default()
+	if err != nil {
+		logger.Error("--sync-models: failed to load embedded model registry", "err", err)
+		return 1
+	}
+
 	syncer := modelsync.NewSyncer(
 		postgres.NewProviderRepo(pool),
 		postgres.NewKeyRepo(pool),
@@ -550,7 +570,7 @@ func runSyncModels(cfg *config.Config, logger *slog.Logger) int {
 		proxy.NewUpstreamClient(cfg),
 		logger,
 		domain.OrganizationID(cfg.DefaultOrgID),
-	)
+	).SetSpecSource(modelRegistry)
 
 	report, err := syncer.SyncAll(ctx)
 	if err != nil {

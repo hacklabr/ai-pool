@@ -151,6 +151,16 @@ golang-migrate · Helm chart com PostgreSQL embutido · imagem distroless nonroo
 - Intervalo via env `AIPP_MODEL_SYNC_INTERVAL` (Go duration, default 6h;
   `0` desativa o job periódico). Sync inicial assíncrono no boot (fail-open,
   nunca bloqueia readiness).
+- **Dicionário interno de especificações** (issue #26, `internal/modelregistry/`):
+  `specs.json` embutido no binário (embed.FS, zero dependências) com
+  `context_window`/`output_limit`/`modalities` por modelo — nome canônico +
+  aliases com override parcial, dados validados nas docs oficiais dos
+  provedores. Modelo novo presente no dicionário nasce já configurado;
+  existente com campo vazio recebe backfill (`ModelRepo.BackfillSpecs`).
+- A invariante ADR-0015 vale também para o dicionário: **só preenche campo
+  vazio (nulo), nunca sobrescreve** (garantida no próprio SQL via
+  `COALESCE`/`CASE`). O relatório de sync contabiliza `enriched` por provedor
+  (log, CLI, resumo do botão admin).
 
 ### RF-12 — Listagem agregada de modelos
 - `GET /v1/models` e `GET /api/models` autenticados pelo mesmo middleware do
