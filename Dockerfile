@@ -79,7 +79,24 @@ RUN test -f /out/aipp && ls -lh /out/aipp
 # sh + coreutils embutidos, para diagnóstico em produção sem imagem extra
 # (ADR-0016; substitui parcialmente ADR-0012). Continua sem package manager:
 # apt/apk ausentes — superfície apenas levemente maior que :nonroot.
-FROM gcr.io/distroless/base-debian12:debug-nonroot
+#
+# NOTA (issue #28): o busybox da distroless vive em /busybox (PATH-only).
+# kubectl/kubelet procuram /bin/bash e /bin/sh LITERAIS ao abrir shell —
+# sem os symlinks abaixo, `kubectl exec -it <pod> -- sh` falha com
+# "stat /bin/sh: no such file or directory".
+FROM gcr.io/distroless/base-debian12:debug-nonroot AS runtime
+
+# Stage auxiliar MINIMALISTA: só para criar /bin com symlinks (o stage final
+# roda como nonroot e não pode escrever em /). Copiamos o DIRETÓRIO inteiro:
+# COPY de symlink individual desreferencia o alvo; COPY de diretório preserva
+# links RELATIVOS — por isso ../busybox/sh (o alvo /busybox/sh existe no
+# stage final: busybox da própria distroless debug).
+FROM busybox:1.37.0-uclibc AS shell-links
+RUN mkdir -p /links/bin && \
+    ln -s ../busybox/sh /links/bin/sh
+
+FROM runtime
+COPY --from=shell-links /links/bin/ /bin/
 
 # TZinfo incluso no base-debian12. Definimos UTC como padrão (timestamps em
 # logs sempre em UTC, consistente com spec DBA §1).
