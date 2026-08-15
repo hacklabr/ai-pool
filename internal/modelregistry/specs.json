@@ -15,7 +15,8 @@
     ]},
     {"canonical": "kimi-k2.7-code", "context_window": 262144, "output_limit": 32768, "modalities": ["text", "image"], "aliases": [
       {"name": "kimi-for-coding"},
-      {"name": "kimi-for-coding-highspeed"}
+      {"name": "kimi-for-coding-highspeed"},
+      {"name": "k2.7"}
     ]}
   ]
 }

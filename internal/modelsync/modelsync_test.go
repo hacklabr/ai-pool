@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"sort"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	"github.com/hacklabr/ai-pool/internal/domain"
@@ -169,11 +170,15 @@ func upstreamServer(t *testing.T, status int, body string, wantAuth string) *htt
 }
 
 func newTestSyncer(providers []domain.Provider, keys map[domain.ID][]domain.ProviderKey, store *fakeModelStore) *Syncer {
+	return newTestSyncerWithDecryptor(providers, keys, store, fakeDecryptor{})
+}
+
+func newTestSyncerWithDecryptor(providers []domain.Provider, keys map[domain.ID][]domain.ProviderKey, store *fakeModelStore, dec domain.KeyDecryptor) *Syncer {
 	return NewSyncer(
 		fakeProviderLister{providers: providers},
 		fakeKeyLister{keys: keys},
 		store,
-		fakeDecryptor{},
+		dec,
 		http.DefaultClient,
 		testLogger(),
 		domain.DefaultOrganizationID,
@@ -754,4 +759,129 @@ func TestSyncAll_BackfillErrorIsNonFatal(t *testing.T) {
 	if len(report.Providers[0].Enriched) != 0 {
 		t.Errorf("enriched = %v, want empty on backfill error", report.Providers[0].Enriched)
 	}
+}
+
+// authRotatingServer rejeita com 401 as chaves listadas em rejected e aceita
+// as demais — para exercitar a rotação de chaves do syncProvider (issue #30).
+// labelDecryptor devolve o Label da chave como token Bearer, permitindo que
+// chaves distintas recebem tokens distintos no teste.
+type labelDecryptor struct{}
+
+func (labelDecryptor) Decrypt(_ context.Context, key domain.ProviderKey) ([]byte, error) {
+	return []byte(key.Label), nil
+}
+
+func usableKeyWithLabel(id, providerID domain.ID, label string) domain.ProviderKey {
+	k := usableKey(id, providerID)
+	k.Label = label
+	return k
+}
+
+func authRotatingServer(t *testing.T, rejected map[string]bool, body string) *httptest.Server {
+	t.Helper()
+	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		token := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
+		if rejected[token] {
+			w.WriteHeader(http.StatusUnauthorized)
+			_, _ = w.Write([]byte(`{"error":{"message":"invalid api key"}}`))
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(body))
+	}))
+}
+
+// TestSyncAll_KeyRotationOn401 (issue #30): 401 de UMA chave gira para a
+// próxima; todas rejeitadas → skip com motivo explícito; falha não-autoral
+// após 401 aborta sem consumir o resto das chaves.
+func TestSyncAll_KeyRotationOn401(t *testing.T) {
+	okBody := `{"data":[{"id":"m-1"},{"id":"m-2"}]}`
+
+	t.Run("first key rejected, second succeeds", func(t *testing.T) {
+		srv := authRotatingServer(t, map[string]bool{"sk-bad": true}, okBody)
+		defer srv.Close()
+
+		p := domain.Provider{ID: 10, OrgID: domain.DefaultOrganizationID, Slug: "p", BaseURL: srv.URL + "/v1", IsActive: true}
+		store := &fakeModelStore{}
+		s := newTestSyncerWithDecryptor(
+			[]domain.Provider{p},
+			map[domain.ID][]domain.ProviderKey{
+				10: {usableKeyWithLabel(100, 10, "sk-bad"), usableKeyWithLabel(101, 10, "sk-good")},
+			},
+			store, labelDecryptor{},
+		)
+		rep, err := s.SyncAll(context.Background())
+		if err != nil {
+			t.Fatalf("SyncAll: %v", err)
+		}
+		if rep.Providers[0].Skipped {
+			t.Fatalf("provider should reconcile with second key, got skip: %s", rep.Providers[0].SkipReason)
+		}
+		if got := rep.Providers[0].Added; len(got) != 2 {
+			t.Errorf("added = %v, want 2 models via rotated key", got)
+		}
+	})
+
+	t.Run("all keys rejected", func(t *testing.T) {
+		srv := authRotatingServer(t, map[string]bool{"sk-a": true, "sk-b": true}, okBody)
+		defer srv.Close()
+
+		p := domain.Provider{ID: 10, OrgID: domain.DefaultOrganizationID, Slug: "p", BaseURL: srv.URL + "/v1", IsActive: true}
+		store := &fakeModelStore{}
+		s := newTestSyncerWithDecryptor(
+			[]domain.Provider{p},
+			map[domain.ID][]domain.ProviderKey{
+				10: {usableKeyWithLabel(100, 10, "sk-a"), usableKeyWithLabel(101, 10, "sk-b")},
+			},
+			store, labelDecryptor{},
+		)
+		rep, err := s.SyncAll(context.Background())
+		if err != nil {
+			t.Fatalf("SyncAll: %v", err)
+		}
+		r := rep.Providers[0]
+		if !r.Skipped {
+			t.Fatal("provider should be skipped when all keys are rejected")
+		}
+		if !strings.Contains(r.SkipReason, "all 2 usable keys rejected") {
+			t.Errorf("SkipReason = %q, want mention of all 2 keys rejected", r.SkipReason)
+		}
+		if len(store.created) != 0 {
+			t.Errorf("created = %v, want none on auth-exhausted provider", store.created)
+		}
+	})
+
+	t.Run("non-auth error after 401 aborts without consuming keys", func(t *testing.T) {
+		var calls int32
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			n := atomic.AddInt32(&calls, 1)
+			if n == 1 {
+				w.WriteHeader(http.StatusUnauthorized)
+				return
+			}
+			w.WriteHeader(http.StatusInternalServerError)
+		}))
+		defer srv.Close()
+
+		p := domain.Provider{ID: 10, OrgID: domain.DefaultOrganizationID, Slug: "p", BaseURL: srv.URL + "/v1", IsActive: true}
+		store := &fakeModelStore{}
+		s := newTestSyncerWithDecryptor(
+			[]domain.Provider{p},
+			map[domain.ID][]domain.ProviderKey{
+				10: {usableKeyWithLabel(100, 10, "sk-a"), usableKeyWithLabel(101, 10, "sk-b")},
+			},
+			store, labelDecryptor{},
+		)
+		rep, err := s.SyncAll(context.Background())
+		if err != nil {
+			t.Fatalf("SyncAll: %v", err)
+		}
+		r := rep.Providers[0]
+		if !r.Skipped {
+			t.Fatal("provider should be skipped on non-auth upstream error")
+		}
+		if got := atomic.LoadInt32(&calls); got != 2 {
+			t.Errorf("upstream calls = %d, want 2 (rotation stops at first non-auth failure)", got)
+		}
+	})
 }

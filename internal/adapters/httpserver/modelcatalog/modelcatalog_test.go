@@ -11,7 +11,9 @@ func intPtr(v int) *int { return &v }
 func strPtr(v string) *string { return &v }
 
 // TestOpenCodeModelsMap: conversão para o schema OpenCode — filtra inativos,
-// usa DisplayName, emite modalities só para multimodal e limit só com valores.
+// usa DisplayName, emite modalities só para multimodal; limit é SEMPRE
+// emitido com context+output completos (issue #29: o OpenCode exige
+// limit.output; modelos sem spec conhecida recebem defaults conservadores).
 func TestOpenCodeModelsMap(t *testing.T) {
 	models := []domain.Model{
 		{Name: "plain", IsActive: true},
@@ -33,8 +35,10 @@ func TestOpenCodeModelsMap(t *testing.T) {
 	if plain["name"] != "plain" {
 		t.Errorf("plain name = %v, want 'plain'", plain["name"])
 	}
-	if _, ok := plain["limit"]; ok {
-		t.Error("plain should not have limit")
+	limitP := plain["limit"].(map[string]any)
+	if limitP["context"] != DefaultContextWindow || limitP["output"] != DefaultOutputLimit {
+		t.Errorf("plain limit = %v, want defaults {context:%d output:%d}",
+			limitP, DefaultContextWindow, DefaultOutputLimit)
 	}
 	if _, ok := plain["modalities"]; ok {
 		t.Error("plain should not have modalities")
@@ -57,8 +61,9 @@ func TestOpenCodeModelsMap(t *testing.T) {
 	if limit2["context"] != 32000 {
 		t.Errorf("ctx-only limit.context = %v, want 32000", limit2["context"])
 	}
-	if _, ok := limit2["output"]; ok {
-		t.Error("ctx-only should not have limit.output")
+	if limit2["output"] != DefaultOutputLimit {
+		t.Errorf("ctx-only limit.output = %v, want default %d (schema validity, issue #29)",
+			limit2["output"], DefaultOutputLimit)
 	}
 }
 

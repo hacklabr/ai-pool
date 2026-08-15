@@ -14,16 +14,33 @@ import (
 // OpenCodeModelsMap converte modelos para o schema esperado pelo OpenCode
 // (provider.{id}.models.{model}):
 //
-//	{ "<model-name>": { "name": <display>, "modalities"?: {...}, "limit"?: {...} } }
+//	{ "<model-name>": { "name": <display>, "modalities"?: {...}, "limit": {...} } }
 //
 // Apenas modelos ativos entram no mapa. Modelos multimodais incluem o bloco
-// "modalities" no formato esperado pelo @ai-sdk/openai-compatible. O bloco
-// "limit" é emitido quando o modelo tem contexto e/ou limite de saída
-// cadastrados (ambos nullable na tabela).
+// "modalities" no formato esperado pelo @ai-sdk/openai-compatible.
+//
+// O bloco "limit" é SEMPRE emitido com "context" E "output" (issue #29): o
+// OpenCode valida limit.output como obrigatório em todo modelo do provider
+// openai-compatible — omiti-lo produz uma config inválida que impede o
+// OpenCode de iniciar. Quando o catálogo não conhece o valor (campo nulo),
+// aplicamos DEFAULTS CONSERVADORES para garantir validade — são fallbacks de
+// schema, não verdades sobre o modelo:
+//   - context: DefaultContextWindow (128K)
+//   - output:  DefaultOutputLimit (32K)
 //
 // Chave do mapa = Model.Name. Se houver nomes repetidos na entrada, a ÚLTIMA
 // ocorrência vence — callers que precisam de precedência (ex.: "primeiro
 // provider ativo vence") devem pré-filtrar/deduplicar a lista.
+
+// DefaultContextWindow é o fallback de schema quando o catálogo não conhece
+// a janela de contexto do modelo (128K — típico de modelos atuais).
+const DefaultContextWindow = 131072
+
+// DefaultOutputLimit é o fallback de schema quando o catálogo não conhece o
+// limite de saída (32K — piso seguro; exceder o real truncaria respostas,
+// ficar abaixo só limita o máximo por resposta).
+const DefaultOutputLimit = 32768
+
 func OpenCodeModelsMap(models []domain.Model) map[string]any {
 	out := make(map[string]any, len(models))
 	for _, m := range models {
@@ -41,18 +58,17 @@ func OpenCodeModelsMap(models []domain.Model) map[string]any {
 				"output": []string{"text"},
 			}
 		}
-		// Bloco "limit": emitido apenas se houver contexto e/ou saída. Ambos
-		// opcionais individualmente (nullable na tabela).
-		limit := map[string]any{}
+		// Bloco "limit" COMPLETO e sempre presente (issue #29): o OpenCode
+		// exige limit.output — config sem ele é rejeitada no startup.
+		context := DefaultContextWindow
 		if m.ContextWindow != nil && *m.ContextWindow > 0 {
-			limit["context"] = *m.ContextWindow
+			context = *m.ContextWindow
 		}
+		output := DefaultOutputLimit
 		if m.OutputLimit != nil && *m.OutputLimit > 0 {
-			limit["output"] = *m.OutputLimit
+			output = *m.OutputLimit
 		}
-		if len(limit) > 0 {
-			model["limit"] = limit
-		}
+		model["limit"] = map[string]any{"context": context, "output": output}
 		out[m.Name] = model
 	}
 	return out

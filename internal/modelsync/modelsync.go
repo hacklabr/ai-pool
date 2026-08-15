@@ -224,8 +224,13 @@ func (s *Syncer) SyncAll(ctx context.Context) (*Report, error) {
 }
 
 // syncProvider sincroniza um provedor. FAIL-SAFE: qualquer falha de rede,
-// timeout, HTTP != 200, JSON inválido, ausência de chave usável ou erro de
-// decriptagem resulta em skipped (zero alterações).
+// timeout, HTTP != 200, ausência de chave usável ou erro de decriptagem
+// resulta em skipped (zero alterações).
+//
+// Rotação de chaves (issue #30): HTTP 401/403 é falha DAQUELA chave (sem
+// crédito, revogada) — tentamos a PRÓXIMA chave usável até esgotar todas;
+// só então o provedor é skipado. Falhas não-autorizacionais (rede, timeout,
+// 5xx do provedor) não dependem da chave: abortam sem girar o pool.
 func (s *Syncer) syncProvider(ctx context.Context, p domain.Provider, local []domain.Model) ProviderReport {
 	rep := ProviderReport{ProviderSlug: p.Slug}
 	skip := func(reason string) ProviderReport {
@@ -236,7 +241,7 @@ func (s *Syncer) syncProvider(ctx context.Context, p domain.Provider, local []do
 		return rep
 	}
 
-	// 1. Uma chave usável do provedor.
+	// 1. Chaves usáveis do provedor (rotacionamos em 401/403).
 	keys, err := s.keys.ListUsableByProvider(ctx, s.orgID, p.ID)
 	if err != nil {
 		return skip("failed to list keys")
@@ -245,58 +250,75 @@ func (s *Syncer) syncProvider(ctx context.Context, p domain.Provider, local []do
 		return skip("no usable key")
 	}
 
-	// 2. Decripta (em memória; zeroizada ao final).
-	plain, err := s.decryptor.Decrypt(ctx, keys[0])
-	if err != nil {
-		return skip("failed to decrypt key")
-	}
-	defer func() {
+	// 2..n. Para cada chave: decripta (em memória; zeroizada ao final da
+	// tentativa), consulta o upstream e decide entre reconciliar, girar para
+	// a próxima chave ou abortar o provedor.
+	var lastAuthFail string
+	for _, key := range keys {
+		plain, err := s.decryptor.Decrypt(ctx, key)
+		if err != nil {
+			// Falha de decrypt é daquela chave (ex.: KEK antiga) — gira.
+			s.logger.Warn("model sync: decrypt failed for key, trying next",
+				"provider", p.Slug, "err", err)
+			continue
+		}
+		ids, status, ferr := s.fetchModelIDs(ctx, p.BaseURL, string(plain))
 		for i := range plain {
 			plain[i] = 0
 		}
-	}()
-
-	// 3. GET {BaseURL}/models — o base_url já contém a versão (ex.: /v1).
-	ids, err := s.fetchModelIDs(ctx, p.BaseURL, string(plain))
-	if err != nil {
-		return skip(err.Error())
+		if ferr == nil {
+			// Provedor OK com esta chave → reconcilia.
+			return s.reconcile(ctx, p, ids, local, rep)
+		}
+		if status == http.StatusUnauthorized || status == http.StatusForbidden {
+			lastAuthFail = fmt.Sprintf("key auth failed (HTTP %d)", status)
+			s.logger.Warn("model sync: key rejected by upstream, trying next key",
+				"provider", p.Slug, "status", status)
+			continue
+		}
+		// Falha não-autorizacional (rede/timeout/5xx/parse): independe da
+		// chave — aborta sem consumir o resto do pool de chaves.
+		return skip(ferr.Error())
 	}
-
-	// 4. Reconciliação (provedor OK).
-	return s.reconcile(ctx, p, ids, local, rep)
+	if lastAuthFail != "" {
+		return skip(fmt.Sprintf("all %d usable keys rejected (%s)", len(keys), lastAuthFail))
+	}
+	return skip("no usable key could be decrypted")
 }
 
 // fetchModelIDs chama GET {baseURL}/models e faz parse tolerante do formato
 // OpenAI {"data":[{"id":"..."}]}: entradas sem id são ignoradas; campos extras
-// são ignorados. Qualquer erro de rede/timeout/HTTP != 200/JSON inválido é
-// retornado como erro (o caller aplica o fail-safe).
-func (s *Syncer) fetchModelIDs(ctx context.Context, baseURL, bearerToken string) ([]string, error) {
+// são ignorados. O status HTTP acompanha o retorno para o caller decidir a
+// rotação de chaves (401/403 = falha da chave; 0 = falha antes de resposta).
+// Qualquer erro de rede/timeout/HTTP != 200/JSON inválido é retornado como
+// erro (o caller aplica o fail-safe).
+func (s *Syncer) fetchModelIDs(ctx context.Context, baseURL, bearerToken string) ([]string, int, error) {
 	ctx, cancel := context.WithTimeout(ctx, s.providerTimeout)
 	defer cancel()
 
 	url := strings.TrimRight(baseURL, "/") + "/models"
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
-		return nil, fmt.Errorf("invalid base_url")
+		return nil, 0, fmt.Errorf("invalid base_url")
 	}
 	req.Header.Set("Authorization", "Bearer "+bearerToken)
 	req.Header.Set("Accept", "application/json")
 
 	resp, err := s.client.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("upstream request failed")
+		return nil, 0, fmt.Errorf("upstream request failed")
 	}
 	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
 		// Drena um pedaço do body para permitir reuse da conexão.
 		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 4096))
-		return nil, fmt.Errorf("upstream returned status %d", resp.StatusCode)
+		return nil, resp.StatusCode, fmt.Errorf("upstream returned status %d", resp.StatusCode)
 	}
 
 	body, err := io.ReadAll(io.LimitReader(resp.Body, maxModelsResponseBytes))
 	if err != nil {
-		return nil, fmt.Errorf("failed to read upstream response")
+		return nil, resp.StatusCode, fmt.Errorf("failed to read upstream response")
 	}
 
 	// Parse tolerante: apenas data[].id importa.
@@ -306,7 +328,7 @@ func (s *Syncer) fetchModelIDs(ctx context.Context, baseURL, bearerToken string)
 		} `json:"data"`
 	}
 	if err := json.Unmarshal(body, &payload); err != nil {
-		return nil, fmt.Errorf("invalid response payload")
+		return nil, resp.StatusCode, fmt.Errorf("invalid response payload")
 	}
 
 	ids := make([]string, 0, len(payload.Data))
@@ -316,7 +338,7 @@ func (s *Syncer) fetchModelIDs(ctx context.Context, baseURL, bearerToken string)
 		}
 		ids = append(ids, item.ID)
 	}
-	return ids, nil
+	return ids, http.StatusOK, nil
 }
 
 // reconcile aplica a diferença upstream × catálogo local (provedor OK):

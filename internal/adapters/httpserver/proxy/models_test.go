@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/hacklabr/ai-pool/internal/adapters/httpserver/modelcatalog"
 	"github.com/hacklabr/ai-pool/internal/domain"
 )
 
@@ -213,13 +214,23 @@ func TestListModels_OpenCodeFormat(t *testing.T) {
 		t.Errorf("modalities.input = %v, want [text image]", modalities["input"])
 	}
 
-	// Modelo sem enriquecimento: só o campo name.
+	// Modelo sem enriquecimento: limit COMPLETO com defaults (issue #29 —
+	// o OpenCode exige limit.output; schema válido mesmo sem spec conhecida).
 	shared, ok := body["shared-model"]
 	if !ok {
 		t.Fatal("shared-model missing from opencode map")
 	}
-	if _, hasLimit := shared["limit"]; hasLimit {
-		t.Error("shared-model should not have limit block (no enrichment)")
+	sharedLimit, ok := shared["limit"].(map[string]any)
+	if !ok {
+		t.Fatal("shared-model missing limit block (must always be present, issue #29)")
+	}
+	if sharedLimit["context"] != float64(modelcatalog.DefaultContextWindow) {
+		t.Errorf("shared-model limit.context = %v, want default %d",
+			sharedLimit["context"], modelcatalog.DefaultContextWindow)
+	}
+	if sharedLimit["output"] != float64(modelcatalog.DefaultOutputLimit) {
+		t.Errorf("shared-model limit.output = %v, want default %d",
+			sharedLimit["output"], modelcatalog.DefaultOutputLimit)
 	}
 	if _, hasMod := shared["modalities"]; hasMod {
 		t.Error("shared-model should not have modalities block (text-only)")
