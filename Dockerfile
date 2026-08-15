@@ -4,10 +4,11 @@
 #
 # Estratégia (DevOps spec §3.5.1):
 #   Stage 1 (builder): golang:<ver>-alpine.
-#   Stage 2 (runtime): gcr.io/distroless/base-debian12:nonroot
+#   Stage 2 (runtime): gcr.io/distroless/base-debian12:debug-nonroot
 #     - CA roots presentes (base-debian12, não static) — HTTPS para provedores.
 #     - UID/GID 65532 pré-configurado (nonroot) — runAsNonRoot sem UID manual.
-#     - Sem shell, sem package manager — superfície de ataque mínima.
+#     - Variante debug: busybox sh + coreutils embutidos para diagnóstico em
+#       produção (ADR-0016); sem package manager — sem apt/apk.
 #
 # O binário embarca migrations (migrations/embed.go) e assets web
 # (web/embed.go) via //go:embed — não há arquivos soltos a copiar.
@@ -70,11 +71,15 @@ RUN CGO_ENABLED=0 GOOS=linux go build \
 # Verificação de sanidade: binário deve existir.
 RUN test -f /out/aipp && ls -lh /out/aipp
 
-# === Stage 2: Runtime (distroless) ===
+# === Stage 2: Runtime (distroless debug) ===
 # base-debian12 (NÃO static): traz CA certificates em /etc/ssl/certs.
 # Essencial — o proxy fala HTTPS com provedores (Gemini, Mistral, DeepSeek,
 # Z.ai, Kimi). distroless/static não tem CA roots e quebraria TLS verify.
-FROM gcr.io/distroless/base-debian12:nonroot
+# Variante :debug-nonroot — mesma base nonroot (UID/GID 65532) com busybox
+# sh + coreutils embutidos, para diagnóstico em produção sem imagem extra
+# (ADR-0016; substitui parcialmente ADR-0012). Continua sem package manager:
+# apt/apk ausentes — superfície apenas levemente maior que :nonroot.
+FROM gcr.io/distroless/base-debian12:debug-nonroot
 
 # TZinfo incluso no base-debian12. Definimos UTC como padrão (timestamps em
 # logs sempre em UTC, consistente com spec DBA §1).
@@ -89,10 +94,15 @@ COPY --from=builder /out/aipp /aipp
 # o publish é feito pelo `docker run -p` ou compose `ports:`.
 EXPOSE 8080
 
-# distroless nonroot já define USER nonroot (UID/GID 65532). Redundante mas
-# explícito para auditoria de securityContext.
+# USER nonroot (UID/GID 65532) já vem definido na imagem base e é mantido
+# na variante debug. Redundante mas explícito para auditoria de
+# securityContext.
 USER nonroot
 
-# Sem shell no distroless — ENTRYPOINT deve ser array (exec form).
-# Args passados após a imagem sobrescrevem (ENTRYPOINT exec form mantém).
+# ENTRYPOINT permanece em exec form (array) — por boa prática, não por
+# dependência do distroless sem shell (que não existe mais nesta variante):
+# exec form garante que o binário é o PID 1, sem shell intermediário, e
+# recebe diretamente os sinais (SIGTERM do graceful shutdown). Com busybox
+# sh agora disponível, o exec form também previne execução acidental via
+# shell. Args passados após a imagem sobrescrevem CMD (ENTRYPOINT mantém).
 ENTRYPOINT ["/aipp"]
