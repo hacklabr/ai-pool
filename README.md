@@ -24,6 +24,12 @@ todos os clientes OpenAI-compatible para **um único endpoint**. O pool:
   mensagem de erro do provedor e reabilita na hora certa.
 - **Governança**: usuários, tokens `sk-aipp-...`, RBAC (admin/usuário), rate
   limiting, auditoria e dashboard de uso.
+- **Onboarding por convite**: o admin gera um link de uso único e o novo
+  usuário se cadastra — e já configura o cliente — com um único
+  `curl -fsSL <url>/invite/<token> | bash`.
+- **Catálogo auto-atualizado**: job periódico sincroniza a lista de modelos
+  com cada provedor (`GET /models`), e o cliente OpenCode atualiza sua lista
+  com `curl -fsSL <url>/setup/update-models.sh | bash`.
 - **Seguro**: chaves de provedor cifradas (AES-256-GCM), tokens em hash,
   sanitização de logs, proteção SSRF.
 
@@ -61,6 +67,74 @@ Cliente (SDK OpenAI / curl)            Provedores de LLM
 
 Interface web admin (server-rendered, HTMX + ECharts) para gerenciar tudo:
 provedores, modelos, chaves, usuários, dashboard e auditoria.
+
+---
+
+## Onboarding por convite (`curl | bash`)
+
+Novo usuário entra **sem tocar na UI admin**:
+
+1. O admin, na tela Usuários, cria um convite informando só o **username** e
+   recebe um comando de setup único:
+
+   ```bash
+   curl -fsSL https://seu-pool.exemplo/invite/inv-XXXXXXXX... | bash
+   ```
+
+2. O novo usuário roda o comando na própria máquina. O script:
+   - pede uma senha (mín. 12 caracteres), lida direto do terminal;
+   - pergunta se quer configurar **OpenCode** e/ou **MiMo-Code**
+     automaticamente;
+   - aceita o convite via API — o servidor cria o usuário (Argon2id) e um
+     token `sk-aipp-...` em uma transação — e grava o provider `llm-pool`
+     (com baseURL, token e catálogo de modelos) em
+     `~/.config/opencode/opencode.json` e/ou `~/.config/mimocode/mimocode.json`.
+
+Detalhes de segurança: token de convite `inv-...` de **uso único**, expira em
+**24 h**, guardado só como SHA-256; `GET /invite/{token}` devolve sempre o
+mesmo script (anti-enumeração); aceite rate-limitado por IP; convites
+pendentes são revogáveis na UI admin.
+
+## Catálogo de modelos sempre atualizado
+
+O catálogo de modelos (tabela `models`) é mantido em sincronia com os
+provedores de três formas complementares:
+
+- **Job periódico in-process** consulta `GET {base_url}/models` de cada
+  provedor ativo e reconcilia o catálogo (a cada 6 h por padrão, via
+  `AIPP_MODEL_SYNC_INTERVAL`). Fail-safe: provedor indisponível ⇒ nenhuma
+  alteração. Nunca deleta modelos nem sobrescreve enriquecimento manual —
+  apenas adiciona novos, reativa os que voltaram e desativa os ausentes.
+- **Dicionário interno de especificações** (`specs.json` embutido no binário):
+  modelos novos já nascem com `context_window`, `output_limit` e modalidades
+  preenchidos (dados das docs oficiais dos provedores); modelos existentes só
+  recebem backfill de campos vazios.
+- **Botão "Sincronizar agora"** na tela de modelos do admin, e CLI idempotente
+  `aipp --sync-models` (usado pelo Helm no pós-instalação — instalação nasce
+  com o catálogo populado).
+
+Clientes consultam o catálogo agregado em **`GET /v1/models`** (formato
+OpenAI; `?format=opencode` devolve o schema do OpenCode). E para atualizar a
+lista de modelos no cliente OpenCode sem editar arquivo nem digitar token:
+
+```bash
+curl -fsSL https://seu-pool.exemplo/setup/update-models.sh | bash
+```
+
+O script lê o token do próprio `opencode.json` do usuário, faz backup do
+arquivo e reescreve apenas `provider["llm-pool"].models` via `jq` (requer
+`jq` instalado).
+
+---
+
+## Planos e cotas por chave
+
+Chaves podem ter um **plano** associado (nome, data de renovação e cota de
+tokens por ciclo — ex.: GLM Coding Lite, Kimi Code). Quando uma chave é
+desativada por teto de cota, o pool persiste a soma de tokens da janela como
+medição observada, e o dashboard admin mostra **uso do plano por ciclo,
+calibração empírica do denominador e subutilização** — na prática, quanto de
+cota contratada está sobrando.
 
 ---
 
@@ -129,6 +203,10 @@ docker compose --env-file .env.docker up --build   # dev com hot rebuild
 ```
 
 Variáveis de configuração: `.env.example` e `deploy/helm/ai-pool/values.yaml`.
+
+Documentação de referência: [docs/reference/prd.md](docs/reference/prd.md)
+(requisitos funcionais), [docs/reference/architecture.md](docs/reference/architecture.md)
+e [docs/reference/jornadas.md](docs/reference/jornadas.md) (fluxos de usuário).
 
 ## Licença
 
