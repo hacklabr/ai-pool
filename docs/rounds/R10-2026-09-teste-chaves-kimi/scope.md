@@ -42,7 +42,7 @@ Espelhados na issue #33 (verificação: tabela de testes unitários do key teste
 `make ci-local` verde).
 
 ## Decisões
-- **Pendente (humano):** 403 concorrente → (A) não altera status, reporta
-  "limite transitório" · (B) desativa com `disabled_until` ~60s. Recomendação
-  do facilitador: A (o limite indica outra request em curso — punir a chave é
-  falso positivo). A definir antes do comentário técnico.
+- **403 concorrente → opção A (humano, 2026-09-28):** não altera o status da
+  chave; o teste reporta "limite concorrente transitório". Motivo da escolha:
+  o 403 indica outra request em curso com a chave — desativar seria falso
+  positivo em chave saudável.
