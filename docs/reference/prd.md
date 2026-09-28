@@ -61,8 +61,11 @@ golang-migrate · Helm chart com PostgreSQL embutido · imagem distroless nonroo
   reativação lazy no próximo request; LRU store notificado.
 - Admin pode **force-disable/force-enable** (`manual_disabled` ignora `disabled_until`).
 - **Teste de chave sob demanda** (`POST /keys/{id}/test` e `/keys/test-all`):
-  chamada real `chat/completions` com `max_tokens=1`; 200 reabilita, 401/403
-  marca `auth_failed`, 429 marca `quota_exceeded` com `Retry-After`.
+  chamada real `chat/completions` com `max_tokens=1` e sem `temperature`
+  (provedor aplica o default); 200 reabilita, 401 marca `auth_failed`; 403
+  marca `auth_failed` EXCETO quando o corpo indica limite concorrente
+  transitório (ex.: "concurrent request limit") — não altera o status, apenas
+  reporta; 429 marca `quota_exceeded` com `Retry-After`.
 
 ### RF-04 — Tokens de API para usuários (`sk-aipp-...`)
 - Formato `sk-aipp-<key_id 8>-<secret 48>`; valor completo exibido **uma única vez**.

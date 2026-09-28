@@ -32,7 +32,11 @@ import (
 // Mapeamento de resposta do provedor → ação:
 //
 //	200 (chat OK)        → enabled (reativa, zera contadores)
-//	401/403 (auth)       → auto_disabled + auth_failed (sem disabled_until)
+//	401 (auth)           → auto_disabled + auth_failed (sem disabled_until)
+//	403 (auth)           → auto_disabled + auth_failed (sem disabled_until)
+//	                      EXCETO quando o corpo indica limite concorrente
+//	                      transitório (ex.: Kimi "concurrent request limit")
+//	                      → NÃO muda status, apenas reporta (issue #33)
 //	429 (rate/quota)     → auto_disabled + quota_exceeded + disabled_until
 //	                      (Retry-After: N ou fallback 1h)
 //	5xx, timeout, rede   → NÃO muda status (infra do provedor, não da chave)
@@ -86,6 +90,16 @@ const testAllConcurrency = 5
 // Regex simplificada (para uso inline no KeyTester — não substitui o parser
 // completo do routing engine, que tem mais formatos).
 var reRetryAfterInline = regexp.MustCompile(`(?i)retry[-_ ]?after["']?\s*[:=]\s*"?(\d+)`)
+
+// reConcurrentLimit detecta textos de limite de concorrência (Kimi Code:
+// "You've reached your concurrent request limit", type access_terminated_error).
+var reConcurrentLimit = regexp.MustCompile(`(?i)concurrent (request )?limit`)
+
+// isTransientLimit403 reporta se o corpo de um 403 indica limite concorrente
+// transitório (não é falha de autenticação — outra request está em curso).
+func isTransientLimit403(body []byte) bool {
+	return reConcurrentLimit.Match(body)
+}
 
 // handleAdminTestKey testa UMA chave e atualiza seu status.
 //
@@ -325,8 +339,14 @@ func (kt *keyTesterImpl) testKey(ctx context.Context, orgID domain.OrganizationI
 	case !persist:
 		// Erro de infra (5xx) ou 4xx não mapeado → não mexe no status.
 		result.OK = false
-		result.Message = formatProviderMessage(resp.StatusCode, latency, hint)
 		result.NewStatus = ""
+		if resp.StatusCode == http.StatusForbidden && isTransientLimit403(respBody) {
+			// 403 de limite concorrente transitório (issue #33): mensagem
+			// dedicada — deixa claro que a chave segue com o status anterior.
+			result.Message = formatTransientLimitMessage(latency)
+		} else {
+			result.Message = formatProviderMessage(resp.StatusCode, latency, hint)
+		}
 	case newStatus == string(domain.KeyStatusEnabled):
 		// 200 OK → reativa.
 		if err := app.keyRepo.ApplyTestStatus(ctx, orgID, k.ID, true, "", nil, nil); err != nil {
@@ -426,12 +446,13 @@ func (kt *keyTesterImpl) firstActiveModelName(ctx context.Context, orgID domain.
 
 // buildTestChatBody monta o body JSON para um /chat/completions mínimo.
 // max_tokens=1 para minimizar consumo de tokens do cliente.
+// "temperature" é omitido de propósito: o provedor aplica o default dele —
+// modelos de coding do Kimi só aceitam temperature=1 e rejeitam 0 com 400.
 func buildTestChatBody(model string) ([]byte, error) {
 	body := map[string]any{
-		"model":       model,
-		"max_tokens":  1,
-		"stream":      false,
-		"temperature": 0,
+		"model":      model,
+		"max_tokens": 1,
+		"stream":     false,
 		"messages": []map[string]string{
 			{"role": "user", "content": "ping"},
 		},
@@ -445,11 +466,26 @@ func buildTestChatBody(model string) ([]byte, error) {
 //   - reason: domain.KeyDisabledReason (vazio se newStatus="")
 //   - disabledUntil: data de reativação (apenas para 429/quota)
 //   - persist: true se deve aplicar a transição (false para 5xx/4xx não mapeados)
+//
+// Mapa resposta→ação: 200 → enabled; 401 → auth_failed; 403 → auth_failed
+// EXCETO se o corpo indica limite concorrente transitório (isTransientLimit403)
+// → não altera status, apenas reporta (issue #33); 429 → quota_exceeded +
+// disabled_until (Retry-After ou fallback 1h); 5xx e demais 4xx → não persiste.
 func decideTestAction(statusCode int, header http.Header, body []byte) (newStatus string, reason domain.KeyDisabledReason, disabledUntil *time.Time, persist bool) {
 	switch {
 	case statusCode == http.StatusOK:
 		return string(domain.KeyStatusEnabled), "", nil, true
-	case statusCode == http.StatusUnauthorized || statusCode == http.StatusForbidden:
+	case statusCode == http.StatusUnauthorized:
+		// Auth falhou — não há quando reativar (chave inválida até correção).
+		return string(domain.KeyStatusAutoDisabled), domain.ReasonAuthFailed, nil, true
+	case statusCode == http.StatusForbidden:
+		// 403 pode ser auth OU limite concorrente transitório: o Kimi Code
+		// responde 403 com "concurrent request limit" quando outra request
+		// está em curso — isso não diz nada sobre a validade da chave.
+		// Decisão (issue #33): limite concorrente NÃO altera o status.
+		if isTransientLimit403(body) {
+			return "", "", nil, false
+		}
 		// Auth falhou — não há quando reativar (chave inválida até correção).
 		return string(domain.KeyStatusAutoDisabled), domain.ReasonAuthFailed, nil, true
 	case statusCode == http.StatusTooManyRequests:
@@ -516,6 +552,13 @@ func formatProviderMessage(statusCode int, latency time.Duration, hint string) s
 		msg += " · " + hint
 	}
 	return msg
+}
+
+// formatTransientLimitMessage constrói a mensagem exibida quando o provedor
+// responde 403 por limite concorrente transitório (issue #33): a chave segue
+// válida e o status NÃO foi alterado — apenas reporta para tentar de novo.
+func formatTransientLimitMessage(latency time.Duration) string {
+	return fmt.Sprintf("limite concorrente transitório (403) · status não alterado · %dms", latency.Milliseconds())
 }
 
 // formatDisabledMessage constroi a mensagem exibida quando a chave foi

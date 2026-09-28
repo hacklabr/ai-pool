@@ -54,6 +54,18 @@ func TestDecideTestAction(t *testing.T) {
 			wantUntilNonNil: false,
 		},
 		{
+			// Kimi Code responde 403 com "concurrent request limit" quando outra
+			// request está em curso — transitório, não é falha de auth (issue #33).
+			name:            "403 concurrent não persiste",
+			statusCode:      403,
+			header:          http.Header{},
+			body:            []byte(`{"error":{"message":"You've reached your concurrent request limit. Please wait for your ongoing requests to finish and try again.","type":"access_terminated_error"}}`),
+			wantNewStatus:   "",
+			wantReason:      "",
+			wantPersist:     false,
+			wantUntilNonNil: false,
+		},
+		{
 			name:            "429 com Retry-After header (segundos)",
 			statusCode:      429,
 			header:          http.Header{"Retry-After": []string{"3600"}},
@@ -220,7 +232,8 @@ func TestSanitizeHint(t *testing.T) {
 }
 
 // TestBuildTestChatBody valida que o body JSON está bem-formado e contem
-// max_tokens=1 + o modelo informado.
+// max_tokens=1 + o modelo informado. temperature é omitido de propósito
+// (provedor aplica default; Kimi coding só aceita 1 — issue #33).
 func TestBuildTestChatBody(t *testing.T) {
 	body, err := buildTestChatBody("test-model")
 	if err != nil {
@@ -236,6 +249,9 @@ func TestBuildTestChatBody(t *testing.T) {
 	if !strings.Contains(s, `"stream":false`) {
 		t.Errorf("body não contem stream=false: %s", s)
 	}
+	if strings.Contains(s, "temperature") {
+		t.Errorf("body não deve conter temperature (default do provedor): %s", s)
+	}
 }
 
 // TestWipeBytes confirma que wipeBytes zera o slice.
@@ -246,6 +262,45 @@ func TestWipeBytes(t *testing.T) {
 		if v != 0 {
 			t.Errorf("byte %d não zerado: %d", i, v)
 		}
+	}
+}
+
+// TestIsTransientLimit403 valida a detecção do 403 de limite concorrente
+// transitório (Kimi Code: "concurrent request limit", access_terminated_error).
+func TestIsTransientLimit403(t *testing.T) {
+	cases := []struct {
+		name string
+		body string
+		want bool
+	}{
+		{"kimi access_terminated_error", `{"error":{"message":"You've reached your concurrent request limit. Please wait for your ongoing requests to finish and try again.","type":"access_terminated_error"}}`, true},
+		{"concurrent limit curto", `concurrent limit reached`, true},
+		{"case-insensitive", `Concurrent Request Limit`, true},
+		{"403 de auth comum", `{"error":{"message":"forbidden"}}`, false},
+		{"rate limit sem concurrent", `{"error":{"message":"rate limit exceeded"}}`, false},
+		{"body vazio", ``, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := isTransientLimit403([]byte(tc.body)); got != tc.want {
+				t.Errorf("isTransientLimit403(%q) = %v, want %v", tc.body, got, tc.want)
+			}
+		})
+	}
+}
+
+// TestFormatTransientLimitMessage valida a mensagem de 403 transitório: deve
+// deixar claro que o status da chave NÃO foi alterado (issue #33).
+func TestFormatTransientLimitMessage(t *testing.T) {
+	msg := formatTransientLimitMessage(569 * time.Millisecond)
+	if !strings.Contains(msg, "transitório") {
+		t.Errorf("esperava 'transitório' na mensagem: %s", msg)
+	}
+	if !strings.Contains(msg, "não alterado") {
+		t.Errorf("esperava 'não alterado' na mensagem: %s", msg)
+	}
+	if !strings.Contains(msg, "569ms") {
+		t.Errorf("esperava latência na mensagem: %s", msg)
 	}
 }
 
