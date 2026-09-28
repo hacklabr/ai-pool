@@ -5,3 +5,4 @@
 - platform: github
 - host: github.com
 - project: hacklabr/ai-pool
+- setup-verified: 1.6.0
