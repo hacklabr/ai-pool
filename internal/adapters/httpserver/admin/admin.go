@@ -283,6 +283,7 @@ func (a *App) Handler() http.Handler {
 	adminPages.HandleFunc("GET /web/admin/keys", a.handlePageAdminKeys)
 	adminPages.HandleFunc("GET /web/admin/tokens", a.handlePageAdminTokens)
 	adminPages.HandleFunc("GET /web/admin/audit", a.handlePageAdminAudit)
+	adminPages.HandleFunc("GET /web/admin/usage", a.handlePageAdminUsageStats)
 	mux.Handle("/web/admin/", a.sessionAuthMiddleware(a.requireRoleMiddleware(domain.RoleAdmin, adminPages)))
 
 	// === /api/web/me/* — próprio usuário (qualquer role) ===
@@ -341,6 +342,7 @@ func (a *App) Handler() http.Handler {
 	adminGrp.HandleFunc("DELETE /api/web/admin/invitations/{id}", a.handleAdminDeleteInvitation)
 	// NOVO F8: endpoints JSON para Dashboard (ECharts) e Auditoria.
 	adminGrp.HandleFunc("GET /api/web/admin/dashboard", a.handleAdminDashboardData)
+	adminGrp.HandleFunc("GET /api/web/admin/usage/stats", a.handleAdminUsageStatsData)
 	adminGrp.HandleFunc("GET /api/web/admin/audit", a.handleAdminAuditData)
 	mux.Handle("/api/web/admin/", a.withAdminAuth(adminGrp))
 

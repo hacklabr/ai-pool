@@ -579,6 +579,236 @@ func (r *UsageLogRepo) QueryUserUsageByModelFromLogs(ctx context.Context, orgID,
 }
 
 // =============================================================================
+// Estatísticas de utilização com filtros combinados (painel admin
+// /web/admin/usage). Lê usage_logs DIRETO (não rollups): os filtros por
+// key_id/model exigem dimensões que usage_rollups não tem, e o painel opera
+// dentro da janela de retenção dos logs (90d — handler faz clamp).
+//
+// Convenção de filtros: campos ponteiros/nil = "sem filtro". A cláusula WHERE
+// é montada por usageStatsWhere com PLACEHOLDERS $n apenas — valores nunca
+// entram na string SQL (AGENTS.md §4).
+// =============================================================================
+
+// UsageStatsFilters são os filtros combinados do painel de estatísticas.
+// OrgID, From e To são obrigatórios (normalizados pelo handler); os demais
+// são opcionais (nil/vazio = todos).
+type UsageStatsFilters struct {
+	OrgID      int64
+	From       time.Time
+	To         time.Time
+	UserID     *int64 // api_tokens.user_id (dono da requisição)
+	KeyID      *int64 // provider_keys.id (chave upstream que atendeu)
+	ProviderID *int64 // providers.id
+	Model      string // models.name (exato)
+}
+
+// UsageStatsTotals agrega os KPIs do período filtrado. LatencyAvgMS é a média
+// aritmética de latency_ms (NULLs ignorados); LatencyMaxMS o pico.
+type UsageStatsTotals struct {
+	RequestCount     int64
+	PromptTokens     int64
+	CompletionTokens int64
+	CachedTokens     int64
+	TotalTokens      int64
+	NonCachedTokens  int64 // total − cached (cached é subset do prompt)
+	ErrorCount       int64 // status_code >= 400
+	LatencyAvgMS     float64
+	LatencyMaxMS     int64
+}
+
+// usageStatsWhere monta o WHERE compartilhado das queries de estatísticas.
+// Retorna a cláusula e os args na ordem dos placeholders. Sempre exige org e
+// janela half-open [from, to) — consistente com AggregateHourFromLogs.
+// Colunas qualificadas com `l.` (alias fixo de usage_logs): nas queries com
+// JOIN (users/provider_keys/providers) colunas como organization_id/created_at
+// existem nas duas tabelas e seriam ambíguas sem qualificação.
+func usageStatsWhere(f UsageStatsFilters) (string, []any) {
+	args := []any{f.OrgID, f.From, f.To}
+	clause := `l.organization_id = $1 AND l.created_at >= $2 AND l.created_at < $3`
+	if f.UserID != nil && *f.UserID > 0 {
+		args = append(args, *f.UserID)
+		clause += fmt.Sprintf(` AND l.user_id = $%d`, len(args))
+	}
+	if f.KeyID != nil && *f.KeyID > 0 {
+		args = append(args, *f.KeyID)
+		clause += fmt.Sprintf(` AND l.key_id = $%d`, len(args))
+	}
+	if f.ProviderID != nil && *f.ProviderID > 0 {
+		args = append(args, *f.ProviderID)
+		clause += fmt.Sprintf(` AND l.provider_id = $%d`, len(args))
+	}
+	if f.Model != "" {
+		args = append(args, f.Model)
+		clause += fmt.Sprintf(` AND l.model = $%d`, len(args))
+	}
+	return clause, args
+}
+
+// QueryUsageStatsTotals retorna os KPIs agregados do período/filtros.
+// cached_tokens é subset de prompt_tokens (convenção do projeto), então
+// NonCachedTokens = total − cached.
+func (r *UsageLogRepo) QueryUsageStatsTotals(ctx context.Context, f UsageStatsFilters) (UsageStatsTotals, error) {
+	where, args := usageStatsWhere(f)
+	q := `SELECT
+		COUNT(*),
+		COALESCE(SUM(prompt_tokens), 0),
+		COALESCE(SUM(completion_tokens), 0),
+		COALESCE(SUM(cached_tokens), 0),
+		COALESCE(SUM(prompt_tokens), 0) + COALESCE(SUM(completion_tokens), 0),
+		COALESCE(SUM(prompt_tokens), 0) + COALESCE(SUM(completion_tokens), 0) - COALESCE(SUM(cached_tokens), 0),
+		COUNT(*) FILTER (WHERE status_code >= 400),
+		COALESCE(AVG(latency_ms), 0),
+		COALESCE(MAX(latency_ms), 0)
+	FROM usage_logs l
+	WHERE ` + where
+	var t UsageStatsTotals
+	if err := r.pool.QueryRow(ctx, q, args...).Scan(
+		&t.RequestCount, &t.PromptTokens, &t.CompletionTokens,
+		&t.CachedTokens, &t.TotalTokens, &t.NonCachedTokens,
+		&t.ErrorCount, &t.LatencyAvgMS, &t.LatencyMaxMS,
+	); err != nil {
+		return UsageStatsTotals{}, fmt.Errorf("UsageLogRepo.QueryUsageStatsTotals: %w", err)
+	}
+	return t, nil
+}
+
+// UsageStatsRow é uma linha de breakdown (uma por valor da dimensão) ou um
+// ponto da série temporal (dimensão = bucket temporal). GroupKey é o rótulo
+// legível; GroupID preserva o id quando o label pode ser ambíguo (0 p/ série).
+type UsageStatsRow struct {
+	GroupID          int64
+	GroupKey         string
+	RequestCount     int64
+	PromptTokens     int64
+	CompletionTokens int64
+	CachedTokens     int64
+	TotalTokens      int64
+	ErrorCount       int64
+	AvgLatencyMS     float64
+}
+
+// QueryUsageStatsBreakdown agrega o uso por UMA dimensão com os mesmos filtros.
+//
+// dim ∈ {"user","key","model","provider"}:
+//   - user     → LEFT JOIN users (username; "(deleted)" se removido)
+//   - key      → LEFT JOIN provider_keys (label; "(deleted)" se removida)
+//   - provider → LEFT JOIN providers (slug)
+//   - model    → r.model direto (pode ser modelo removido — histórico preservado)
+//
+// LEFT JOIN preserva histórico mesmo após remoção da entidade (auditável).
+// ORDER BY total_tokens DESC: ranking natural (maiores consumidores primeiro).
+func (r *UsageLogRepo) QueryUsageStatsBreakdown(ctx context.Context, f UsageStatsFilters, dim string) ([]UsageStatsRow, error) {
+	// select/expr/join por dimensão — strings fixas (sem input do usuário).
+	var sel, grp, join string
+	switch dim {
+	case "user":
+		sel, grp, join = `COALESCE(u.username, '(deleted)')`, `u.username`,
+			` LEFT JOIN users u ON u.id = l.user_id`
+	case "key":
+		sel, grp, join = `COALESCE(k.label, '(deleted)')`, `k.label`,
+			` LEFT JOIN provider_keys k ON k.id = l.key_id`
+	case "provider":
+		sel, grp, join = `COALESCE(p.slug, '(deleted)')`, `p.slug`,
+			` LEFT JOIN providers p ON p.id = l.provider_id`
+	case "model":
+		sel, grp, join = `l.model`, `l.model`, ``
+	default:
+		return nil, fmt.Errorf("UsageLogRepo.QueryUsageStatsBreakdown: dimensão inválida %q", dim)
+	}
+
+	where, args := usageStatsWhere(f)
+	// Dimensão temporal (date_trunc) não se aplica aqui — somente agrupamentos
+	// por entidade. selectExpr inclui o id quando a dimensão o tem.
+	selExpr := sel
+	idExpr := `0`
+	switch dim {
+	case "user":
+		idExpr = `l.user_id`
+	case "key":
+		idExpr = `l.key_id`
+	case "provider":
+		idExpr = `l.provider_id`
+	}
+
+	q := `SELECT ` + idExpr + `, ` + selExpr + `,
+		COUNT(*),
+		COALESCE(SUM(l.prompt_tokens), 0),
+		COALESCE(SUM(l.completion_tokens), 0),
+		COALESCE(SUM(l.cached_tokens), 0),
+		COALESCE(SUM(l.prompt_tokens), 0) + COALESCE(SUM(l.completion_tokens), 0),
+		COUNT(*) FILTER (WHERE l.status_code >= 400),
+		COALESCE(AVG(l.latency_ms), 0)
+	FROM usage_logs l` + join + `
+	WHERE ` + where + `
+	GROUP BY ` + idExpr + `, ` + grp + `
+	ORDER BY 7 DESC NULLS LAST`
+
+	rows, err := r.pool.Query(ctx, q, args...)
+	if err != nil {
+		return nil, fmt.Errorf("UsageLogRepo.QueryUsageStatsBreakdown(%s): %w", dim, err)
+	}
+	defer rows.Close()
+
+	out := make([]UsageStatsRow, 0)
+	for rows.Next() {
+		var row UsageStatsRow
+		if err := rows.Scan(
+			&row.GroupID, &row.GroupKey, &row.RequestCount,
+			&row.PromptTokens, &row.CompletionTokens, &row.CachedTokens,
+			&row.TotalTokens, &row.ErrorCount, &row.AvgLatencyMS,
+		); err != nil {
+			return nil, fmt.Errorf("UsageLogRepo.QueryUsageStatsBreakdown(%s) scan: %w", dim, err)
+		}
+		out = append(out, row)
+	}
+	return out, rows.Err()
+}
+
+// UsageStatsPoint é um ponto da série temporal do painel.
+type UsageStatsPoint struct {
+	Bucket       time.Time
+	RequestCount int64
+	TotalTokens  int64
+	CachedTokens int64
+	ErrorCount   int64
+}
+
+// QueryUsageStatsTimeSeries retorna a série temporal agregada por bucket
+// ("hour" ou "day"). Buckets SEM uso não aparecem (gap no gráfico — o JS
+// pode interpolar; consistente com QueryUserHourlyFromLogs).
+func (r *UsageLogRepo) QueryUsageStatsTimeSeries(ctx context.Context, f UsageStatsFilters, bucket string) ([]UsageStatsPoint, error) {
+	if bucket != "hour" && bucket != "day" {
+		bucket = "day"
+	}
+	where, args := usageStatsWhere(f)
+	q := `SELECT date_trunc('` + bucket + `', created_at) AS bucket,
+		COUNT(*),
+		COALESCE(SUM(prompt_tokens), 0) + COALESCE(SUM(completion_tokens), 0),
+		COALESCE(SUM(cached_tokens), 0),
+		COUNT(*) FILTER (WHERE status_code >= 400)
+	FROM usage_logs l
+	WHERE ` + where + `
+	GROUP BY bucket
+	ORDER BY bucket`
+
+	rows, err := r.pool.Query(ctx, q, args...)
+	if err != nil {
+		return nil, fmt.Errorf("UsageLogRepo.QueryUsageStatsTimeSeries: %w", err)
+	}
+	defer rows.Close()
+
+	out := make([]UsageStatsPoint, 0)
+	for rows.Next() {
+		var p UsageStatsPoint
+		if err := rows.Scan(&p.Bucket, &p.RequestCount, &p.TotalTokens, &p.CachedTokens, &p.ErrorCount); err != nil {
+			return nil, fmt.Errorf("UsageLogRepo.QueryUsageStatsTimeSeries scan: %w", err)
+		}
+		out = append(out, p)
+	}
+	return out, rows.Err()
+}
+
+// =============================================================================
 // Quebra por CHAVE e série HORÁRIA (logs, tempo real).
 //
 // Usadas pela página de detalhe do usuário e pela visão de chaves. userID=0

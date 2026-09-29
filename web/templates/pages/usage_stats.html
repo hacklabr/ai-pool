@@ -1,0 +1,227 @@
+{{define "pages/usage_stats.html"}}{{template "layouts/base.html" .}}{{end}}
+
+{{define "page-content"}}{{$c := .Content}}<div class="o-stack u-my-6">
+  <div class="o-page-header">
+    <div>
+      <h1>Estatísticas de utilização</h1>
+      <p class="u-text-muted u-text-sm">
+        Período: {{$c.Filter.From.Format "02/01/2006 15:04"}} — {{$c.Filter.To.Format "02/01/2006 15:04"}}
+        (janela máxima de {{$c.Retention}} dias — retenção dos logs)
+      </p>
+    </div>
+  </div>
+
+  {{/* === Barra de filtros (GET — filtros ficam na URL, bookmarkable) === */}}
+  <div class="c-card">
+    <form method="get" action="/web/admin/usage" class="o-grid" style="gap:.75rem; align-items:end;">
+      <div>
+        <label class="u-text-sm" for="f-preset">Período</label>
+        <select id="f-preset" name="preset" class="c-input"
+                onchange="if (this.value) { document.getElementById('f-from').disabled = true; document.getElementById('f-to').disabled = true; } else { document.getElementById('f-from').disabled = false; document.getElementById('f-to').disabled = false; }">
+          <option value="" {{if eq $c.Filter.Preset ""}}selected{{end}}>Personalizado</option>
+          <option value="24h" {{if eq $c.Filter.Preset "24h"}}selected{{end}}>Últimas 24 horas</option>
+          <option value="7d" {{if eq $c.Filter.Preset "7d"}}selected{{end}}>Últimos 7 dias</option>
+          <option value="30d" {{if eq $c.Filter.Preset "30d"}}selected{{end}}>Últimos 30 dias</option>
+        </select>
+      </div>
+      <div>
+        <label class="u-text-sm" for="f-from">De</label>
+        <input id="f-from" type="date" name="from" class="c-input"
+               value="{{$c.Filter.From.Format "2006-01-02"}}">
+      </div>
+      <div>
+        <label class="u-text-sm" for="f-to">Até</label>
+        <input id="f-to" type="date" name="to" class="c-input"
+               value="{{$c.Filter.To.Format "2006-01-02"}}">
+      </div>
+      <div>
+        <label class="u-text-sm" for="f-user">Usuário</label>
+        <select id="f-user" name="user_id" class="c-input">
+          <option value="">Todos</option>
+          {{range $c.Users}}
+            <option value="{{.ID}}" {{if eq .ID $c.SelUserID}}selected{{end}}>{{.Label}}</option>
+          {{end}}
+        </select>
+      </div>
+      <div>
+        <label class="u-text-sm" for="f-key">Chave</label>
+        <select id="f-key" name="key_id" class="c-input">
+          <option value="">Todas</option>
+          {{range $c.Keys}}
+            <option value="{{.ID}}" {{if eq .ID $c.SelKeyID}}selected{{end}}>{{.Label}}</option>
+          {{end}}
+        </select>
+      </div>
+      <div>
+        <label class="u-text-sm" for="f-provider">Provedor</label>
+        <select id="f-provider" name="provider_id" class="c-input">
+          <option value="">Todos</option>
+          {{range $c.Providers}}
+            <option value="{{.ID}}" {{if eq .ID $c.SelProviderID}}selected{{end}}>{{.Label}}</option>
+          {{end}}
+        </select>
+      </div>
+      <div>
+        <label class="u-text-sm" for="f-model">Modelo</label>
+        <select id="f-model" name="model" class="c-input">
+          <option value="">Todos</option>
+          {{range $c.Models}}
+            <option value="{{.Label}}" {{if eq .Label $c.FormModel}}selected{{end}}>{{.Label}}</option>
+          {{end}}
+        </select>
+      </div>
+      <div>
+        <button type="submit" class="c-button c-button--primary">Aplicar</button>
+      </div>
+    </form>
+  </div>
+
+  {{/* === KPI Cards (primeira pintura server-rendered) === */}}
+  <div class="o-grid o-grid--stats">
+    {{with $c.Totals}}
+      <div class="c-stat-card">
+        <span class="c-stat-card__label">Requisições</span>
+        <span class="c-stat-card__value">{{fmtNumber .RequestCount}}</span>
+        <span class="c-stat-card__hint">no período/filtros</span>
+      </div>
+      <div class="c-stat-card c-stat-card--featured">
+        <span class="c-stat-card__label">Tokens economizados (cache)</span>
+        <span class="c-stat-card__value">{{fmtNumber .CachedTokens}}</span>
+        <span class="c-stat-card__hint">↑ via afinidade de cache de contexto</span>
+      </div>
+      <div class="c-stat-card">
+        <span class="c-stat-card__label">Tokens consumidos</span>
+        <span class="c-stat-card__value">{{fmtNumber .TotalTokens}}</span>
+        <span class="c-stat-card__hint">prompt + completion</span>
+      </div>
+      <div class="c-stat-card {{if gt .ErrorCount 0}}c-stat-card--danger{{end}}">
+        <span class="c-stat-card__label">Erros</span>
+        <span class="c-stat-card__value">{{fmtNumber .ErrorCount}}</span>
+        <span class="c-stat-card__hint">status ≥ 400</span>
+      </div>
+      <div class="c-stat-card">
+        <span class="c-stat-card__label">Latência média</span>
+        <span class="c-stat-card__value">{{printf "%.0f" .LatencyAvgMS}}<small>ms</small></span>
+        <span class="c-stat-card__hint">pico {{fmtNumber .LatencyMaxMS}} ms</span>
+      </div>
+    {{else}}
+      <p class="u-text-muted">Dados indisponíveis no momento.</p>
+    {{end}}
+  </div>
+
+  {{/* === Gráficos (carregam via JSON com os MESMOS filtros da URL) === */}}
+  <div class="o-grid">
+    <div class="c-chart-card" style="grid-column: span 3;">
+      <h3 class="c-chart-card__title">Série temporal</h3>
+      <div id="chart-series" class="c-chart-card__canvas" style="height:280px;"></div>
+    </div>
+    <div class="c-chart-card" style="grid-column: span 3;">
+      <h3 class="c-chart-card__title">Por usuário</h3>
+      <div id="chart-by-user" class="c-chart-card__canvas" style="height:280px;"></div>
+    </div>
+    <div class="c-chart-card" style="grid-column: span 3;">
+      <h3 class="c-chart-card__title">Por chave</h3>
+      <div id="chart-by-key" class="c-chart-card__canvas" style="height:280px;"></div>
+    </div>
+    <div class="c-chart-card" style="grid-column: span 3;">
+      <h3 class="c-chart-card__title">Por modelo</h3>
+      <div id="chart-by-model" class="c-chart-card__canvas" style="height:280px;"></div>
+    </div>
+  </div>
+</div>
+
+{{/*
+ * ECharts carregado condicionalmente (apenas nesta página). CDN com SRI.
+ * Os gráficos buscam /api/web/admin/usage/stats + window.location.search —
+ * os MESMOS filtros aplicados na página (fonte única de verdade: a URL).
+ */}}
+<script src="https://cdn.jsdelivr.net/npm/echarts@5.5.1/dist/echarts.min.js"
+        integrity="sha384-Mx5lkUEQPM1pOJCwFtUICyX45KNojXbkWdYhkKUKsbv391mavbfoAmONbzkgYPzR"
+        crossorigin="anonymous"></script>
+<script>
+(function () {
+  if (!window.echarts) return;
+  var charts = [];
+  function mk(id) {
+    var el = document.getElementById(id);
+    if (!el) return null;
+    var c = echarts.init(el);
+    charts.push(c);
+    return c;
+  }
+  function empty(c) {
+    c.setOption({
+      title: { text: 'Sem dados no período', left: 'center', top: 'middle',
+               textStyle: { color: '#999', fontSize: 13, fontWeight: 'normal' } }
+    });
+  }
+  function bar(c, labels, values, orient) {
+    var horizontal = orient === 'horizontal';
+    c.setOption({
+      tooltip: { trigger: 'axis' },
+      grid: { left: '3%', right: '4%', bottom: '3%', containLabel: true },
+      xAxis: { type: horizontal ? 'value' : 'category', data: horizontal ? null : labels },
+      yAxis: { type: horizontal ? 'category' : 'value', data: horizontal ? labels : null },
+      series: [{ type: 'bar', data: values, itemStyle: { borderRadius: [4,4,0,0] } }]
+    });
+  }
+  async function load() {
+    var seriesChart = mk('chart-series');
+    var byUser = mk('chart-by-user');
+    var byKey = mk('chart-by-key');
+    var byModel = mk('chart-by-model');
+    try {
+      var resp = await fetch('/api/web/admin/usage/stats' + window.location.search,
+                             { credentials: 'same-origin' });
+      if (!resp.ok) throw new Error('HTTP ' + resp.status);
+      var data = await resp.json();
+
+      // Série temporal: tokens (bar) + requisições (linha).
+      var pts = data.series || [];
+      if (!pts.length) { empty(seriesChart); }
+      else {
+        seriesChart.setOption({
+          tooltip: { trigger: 'axis' },
+          legend: { data: ['Tokens', 'Requisições'] },
+          grid: { left: '3%', right: '4%', bottom: '3%', containLabel: true },
+          xAxis: { type: 'category', data: pts.map(function (p) {
+            return new Date(p.bucket).toLocaleString('pt-BR',
+              { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' });
+          }) },
+          yAxis: [
+            { type: 'value', name: 'Tokens' },
+            { type: 'value', name: 'Req', splitLine: { show: false } }
+          ],
+          series: [
+            { name: 'Tokens', type: 'bar', data: pts.map(function (p) { return p.total_tokens; }),
+              itemStyle: { borderRadius: [4,4,0,0] } },
+            { name: 'Requisições', type: 'line', yAxisIndex: 1, smooth: true,
+              data: pts.map(function (p) { return p.request_count; }) }
+          ]
+        });
+      }
+
+      // Breakdowns: barras horizontais, top 10 por tokens.
+      var bds = {};
+      (data.breakdowns || []).forEach(function (b) { bds[b.dimension] = b.rows || []; });
+      [[byUser, 'user'], [byKey, 'key'], [byModel, 'model']].forEach(function (pair) {
+        var c = pair[0], dim = pair[1];
+        if (!c) return;
+        var rows = (bds[dim] || []).filter(function (r) { return r.total_tokens > 0; }).slice(0, 10);
+        if (!rows.length) { empty(c); return; }
+        bar(c, rows.map(function (r) { return r.label; }),
+               rows.map(function (r) { return r.total_tokens; }), 'horizontal');
+      });
+    } catch (e) {
+      [seriesChart, byUser, byKey, byModel].forEach(function (c) {
+        if (c) c.setOption({ title: { text: 'Não foi possível carregar.', left: 'center',
+          top: 'middle', textStyle: { color: '#999', fontSize: 13, fontWeight: 'normal' } } });
+      });
+    }
+    window.addEventListener('resize', function () {
+      charts.forEach(function (c) { c.resize(); });
+    });
+  }
+  load();
+})();
+</script>{{end}}

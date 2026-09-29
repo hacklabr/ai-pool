@@ -112,6 +112,13 @@ golang-migrate · Helm chart com PostgreSQL embutido · imagem distroless nonroo
 - Dashboard admin: KPIs (requests, tokens por tipo, **cached_tokens** como KPI de
   economia, erros) + 3 gráficos ECharts, janela from/to (default 7d), group by
   user|provider|model — consulta somente rollups. Usuário comum vê "meu uso".
+- **Painel de Estatísticas** (`/web/admin/usage`, admin): filtros combinados
+  (período com presets e clamp de 90d, usuário, **chave de provedor**,
+  provedor, modelo) sobre `usage_logs` DIRETO — os filtros por chave/modelo
+  não existem como dimensão de `usage_rollups`. KPIs + série temporal
+  (hour ≤ 48h, day acima) + breakdowns por user|key|model|provider.
+  Índices: `idx_usage_logs_key_time` (202608141000),
+  `idx_usage_logs_model_time` (202609281000).
 
 ### RF-08 — Rate limiting
 - Token bucket in-memory; **60 req/min por token** (burst 10; configurável);

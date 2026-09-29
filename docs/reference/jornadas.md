@@ -86,6 +86,11 @@ visibilidade de uso.
 6. **Uso e custos:** Dashboard com KPIs (requests, tokens, **cached_tokens** —
    economia de cache, erros) e gráficos por usuário/provedor/modelo em janela
    de tempo. (Custo em dólar: pavimentado, ainda não calculado — ROADMAP.)
+   Para investigação com filtros combinados, a tela **Estatísticas**
+   (`/web/admin/usage`) cruza período (presets 24h/7d/30d ou datas, máx. 90d),
+   usuário, chave de provedor, provedor e modelo — KPIs, série temporal e
+   breakdowns por usuário/chave/modelo. Janela limitada à retenção dos logs
+   (90 dias); visões de longo prazo usam o Dashboard (rollups).
 7. **Auditoria:** tela append-only com filtros — hoje cobre apenas ações de
    convites (cobertura parcial é dívida conhecida).
 

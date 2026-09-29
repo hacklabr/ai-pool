@@ -31,6 +31,7 @@ func TestTemplateRenderer_LoadFromEmbedFS(t *testing.T) {
 		"pages/my_usage.html",
 		"pages/audit.html",
 		"pages/tokens.html",
+		"pages/usage_stats.html",
 	}
 	for _, p := range expectedPages {
 		if _, ok := r.pages[p]; !ok {
