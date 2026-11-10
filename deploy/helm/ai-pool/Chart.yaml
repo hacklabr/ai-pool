@@ -19,7 +19,9 @@ type: application
 # 0.3.1: toggle migrations.syncModels (default true) — com false, o container
 #        principal do hook roda --migrate-only (compatível com imagens antigas
 #        sem a flag --sync-models, ex.: 32fbcbb).
-version: 0.3.1
+# 0.3.2: fallback do hook ganha KEK_PATH/TOKEN_PEPPER_PATH + mount do Secret
+#        (config.Validate os exige em prod; sem isso o container reprova).
+version: 0.3.2
 
 # appVersion = versão da aplicação empacotada (binário Go).
 # Deve casar com a tag da imagem Docker referenciada em values.yaml (image.tag).
