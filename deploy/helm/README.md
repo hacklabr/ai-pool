@@ -52,9 +52,11 @@ O proxy cifra as chaves de provedores com AES-256-GCM. A KEK e o pepper são
 (perdeu = perdeu todas as chaves cifradas no banco).
 
 ```bash
-KEK=$(openssl rand -base64 32)
+# ⚠️ KEK: o app exige EXATAMENTE 32 bytes CRUS no arquivo /etc/aipp/kek
+# (envelope.go). NÃO use base64 do valor — 44 bytes serão rejeitados.
+openssl rand 32 > /tmp/kek.bin
 PEPPER=$(openssl rand -base64 48)
-echo "KEK=$KEK"
+echo "KEK (base64 p/ cofre; recupere com base64 -d): $(base64 -w0 /tmp/kek.bin)"
 echo "PEPPER=$PEPPER"
 # ⚠️  SALVE A SAÍDA EM COFRE OFFLINE AGORA (passphrase manager, vault físico)
 ```
@@ -68,8 +70,9 @@ O nome do Secret **deriva do release name** (`<release>-secrets`). Com release
 kubectl create namespace hacklab-ai-pool
 
 kubectl -n hacklab-ai-pool create secret generic hacklab-ai-pool-secrets \
-  --from-literal=kek="$KEK" \
+  --from-file=kek=/tmp/kek.bin \
   --from-literal=token_pepper="$PEPPER"
+rm /tmp/kek.bin
 ```
 
 > Em produção real, prefira External Secrets Operator (`externalSecret.enabled=true`)

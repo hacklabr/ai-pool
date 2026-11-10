@@ -22,16 +22,20 @@ offline** (perdeu = perdeu todas as chaves cifradas no DB).
 
 ```bash
 # Gere os segredos (salve a saída em cofre offline AGORA):
-KEK=$(openssl rand -base64 32)
+# ⚠️ KEK: o app exige EXATAMENTE 32 bytes CRUS no arquivo /etc/aipp/kek
+# (internal/adapters/crypto/envelope.go rejeita qualquer outro tamanho —
+# `openssl rand -base64 32` produz 44 bytes e É REJEITADO no startup).
+openssl rand 32 > /tmp/kek.bin
 PEPPER=$(openssl rand -base64 48)
-echo "KEK=$KEK"
+echo "KEK (base64 p/ cofre; recupere com base64 -d): $(base64 -w0 /tmp/kek.bin)"
 echo "PEPPER=$PEPPER"
 
 # Crie o namespace + Secret K8s:
 kubectl create namespace hacklab-ai-pool
 kubectl -n hacklab-ai-pool create secret generic hacklab-ai-pool-secrets \
-  --from-literal=kek="$KEK" \
+  --from-file=kek=/tmp/kek.bin \
   --from-literal=token_pepper="$PEPPER"
+rm /tmp/kek.bin
 ```
 
 > O nome do Secret **deriva do release name** (`<release>-secrets`).
@@ -65,16 +69,20 @@ kubectl -n hacklab-ai-pool create secret generic ghcr-pull \
 > **PAT do GitHub** precisa ter escopo `read:packages`. Crie em:
 > https://github.com/settings/tokens (classic) — válida por 1 ano, **rotacione**.
 
-Depois referencie no `helm install` (ou em `values-prod.yaml`):
+Depois referencie no `helm install` (ou em seu values de ambiente local):
+
+> **Values de ambiente são LOCAIS** — o padrão `deploy/helm/ai-pool/values-*.yaml`
+> é gitignored; crie o seu (ex.: `values-prod.yaml`, `values-ninjaverso-prod.yaml`)
+> a partir do `values.yaml` e não o commite.
 
 ```bash
 helm install hacklab-ai-pool deploy/helm/ai-pool \
   -n hacklab-ai-pool \
-  -f deploy/helm/ai-pool/values-prod.yaml \
+  -f deploy/helm/ai-pool/values-<ambiente>.yaml \
   --set 'image.pullSecrets[0].name=ghcr-pull'
 ```
 
-Ou, equivalente em `values-prod.yaml`:
+Ou, equivalente no seu values local:
 ```yaml
 image:
   pullSecrets:
@@ -89,7 +97,7 @@ image:
 ```bash
 helm install hacklab-ai-pool deploy/helm/ai-pool \
   -n hacklab-ai-pool \
-  -f deploy/helm/ai-pool/values-prod.yaml
+  -f deploy/helm/ai-pool/values-<ambiente>.yaml
 ```
 
 O `helm install` imprime o `NOTES.txt` com os próximos passos.
@@ -140,7 +148,7 @@ kubectl -n hacklab-ai-pool create secret generic ai-pool-db \
 
 helm install hacklab-ai-pool deploy/helm/ai-pool \
   -n hacklab-ai-pool \
-  -f deploy/helm/ai-pool/values-prod.yaml \
+  -f deploy/helm/ai-pool/values-<ambiente>.yaml \
   --set postgresql.enabled=false \
   --set database.existingSecret=ai-pool-db
 ```
@@ -169,7 +177,7 @@ Para rotacionar:
 ```bash
 NEW_PASS=$(openssl rand -base64 24)
 helm upgrade hacklab-ai-pool deploy/helm/ai-pool -n hacklab-ai-pool \
-  -f deploy/helm/ai-pool/values-prod.yaml \
+  -f deploy/helm/ai-pool/values-<ambiente>.yaml \
   --set postgresql.auth.password="$NEW_PASS"
 # O Secret "<release>-db" é regenerado com nova senha + DATABASE_URL em sync.
 # O postgres pod precisa ser restartado para aplicar: kubectl delete pod hacklab-ai-pool-postgresql-0
@@ -181,5 +189,5 @@ helm upgrade hacklab-ai-pool deploy/helm/ai-pool -n hacklab-ai-pool \
 make helm-lint                                              # valida
 make helm-template HELM_SETS="--set ingress.enabled=true"   # renderiza
 helm template hacklab-ai-pool deploy/helm/ai-pool \
-  -f deploy/helm/ai-pool/values-prod.yaml                   # renderiza com prod values
+  -f deploy/helm/ai-pool/values-<ambiente>.yaml                   # renderiza com prod values
 ```

@@ -35,6 +35,11 @@ token-pepper-dev.key
 # Beego / runtime
 logs/
 conf/app.local.conf
+
+# Values de ambiente do helm — LOCAIS, não commitados.
+# O chart commita apenas o values.yaml base (defaults); cada instalação
+# mantém seu values-<ambiente>.yaml fora do versionamento.
+deploy/helm/ai-pool/values-*.yaml
 tmp/
 
 # Coverage
