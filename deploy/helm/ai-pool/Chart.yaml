@@ -13,7 +13,13 @@ type: application
 # 0.2.0: refatoração PostgreSQL — Bitnami subchart removido; templates nativos
 #        no padrão Hacklab (StatefulSet/PVC/Secret/Service próprios, imagem
 #        oficial postgres:16-alpine). Schema da seção `postgresql:` mudou.
-version: 0.2.0
+# 0.3.0: node placement do PostgreSQL — novas chaves postgresql.nodeSelector /
+#        tolerations / affinity renderizadas no StatefulSet (default vazio =
+#        qualquer node, comportamento inalterado).
+# 0.3.1: toggle migrations.syncModels (default true) — com false, o container
+#        principal do hook roda --migrate-only (compatível com imagens antigas
+#        sem a flag --sync-models, ex.: 32fbcbb).
+version: 0.3.1
 
 # appVersion = versão da aplicação empacotada (binário Go).
 # Deve casar com a tag da imagem Docker referenciada em values.yaml (image.tag).

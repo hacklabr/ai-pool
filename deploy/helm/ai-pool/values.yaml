@@ -197,6 +197,21 @@ postgresql:
   #       emptyDir: {}
   extraMountPoints: []
 
+  # Node placement do pod do PostgreSQL (default: qualquer node).
+  # Não herda do nodeSelector/tolerations raiz (que valem para Deployment e
+  # migration-job) — defina explicitamente se quiser fixar o DB.
+  # Exemplo (nodes critical do hacklab — taint hacklab.com.br/workload=critical):
+  #   nodeSelector:
+  #     hacklab.com.br/workload: critical
+  #   tolerations:
+  #     - key: hacklab.com.br/workload
+  #       operator: Equal
+  #       value: critical
+  #       effect: NoSchedule
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+
 # === External Secrets Operator (ESO) ===
 # Materializa Secrets no cluster a partir de um backend externo
 # (Vault / AWS Secrets Manager / GCP Secret Manager / Azure Key Vault).
@@ -347,11 +362,18 @@ networkPolicy:
     databaseCIDR: "0.0.0.0/0"
     databasePort: 5432
 
-# === Migrations Job (Helm pre-install/pre-upgrade hook) ===
+# === Migrations Job (Helm post-install/post-upgrade hook) ===
 # Roda `aipp --migrate-only` ANTES de qualquer pod subir. Mesma imagem do app.
 # Falha no Job = deploy aborta (zero pods novos com schema inconsistente).
 migrations:
   enabled: true
+  # syncModels: rodar `aipp --sync-models` após as migrations (catálogo de
+  # modelos RF-11/ADR-0015). REQUER imagem com a feature (flag --sync-models
+  # no binário). Imagens antigas (ex.: 32fbcbb) NÃO têm o flag e o hook
+  # reprova com "flag provided but not defined: -sync-models". Com false, o
+  # container principal roda --migrate-only de novo (idempotente, exit 0) —
+  # use até publicar imagem com a feature; sincronize o catálogo via admin.
+  syncModels: true
   # activeDeadlineSeconds: timeout do Job. Migrações longas (índices grandes)
   # precisam de margem. Default 5min (geroso para schema greenfield).
   activeDeadlineSeconds: 300

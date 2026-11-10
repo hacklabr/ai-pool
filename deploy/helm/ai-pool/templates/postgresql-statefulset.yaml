@@ -50,6 +50,18 @@ spec:
         fsGroup: 999
         seccompProfile:
           type: RuntimeDefault
+      {{- with .Values.postgresql.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.postgresql.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.postgresql.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
       containers:
         - name: postgresql
           image: {{ .Values.postgresql.image.repository }}:{{ .Values.postgresql.image.tag }}

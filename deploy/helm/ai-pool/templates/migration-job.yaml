@@ -160,6 +160,7 @@ spec:
           securityContext:
             {{- toYaml .Values.containerSecurityContext | nindent 12 }}
       containers:
+        {{- if .Values.migrations.syncModels }}
         # === Container principal: sync do catálogo de modelos (RF-11) ===
         # Roda DEPOIS das migrations (initContainer migrate). O CLI é
         # fail-safe: provedor fora do ar/sem chave sai 0; exit 1 só em falha
@@ -200,6 +201,38 @@ spec:
             {{- toYaml .Values.migrations.resources | nindent 12 }}
           securityContext:
             {{- toYaml .Values.containerSecurityContext | nindent 12 }}
+        {{- else }}
+        # === Fallback p/ imagens SEM a flag --sync-models (ex.: 32fbcbb) ===
+        # O initContainer migrate já aplicou o schema; o container principal
+        # re-executa --migrate-only (idempotente: "no change" → exit 0) só
+        # para o Job completar. Catálogo de modelos: sincronizar via botão do
+        # admin (ou reverter syncModels=true após publicar imagem com a flag).
+        # (nome distinto do initContainer: K8s proíbe nomes duplicados no pod)
+        - name: migrate-confirm
+          image: {{ include "ai-pool.image" . }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          args:
+            - --migrate-only
+          env:
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "ai-pool.dbSecretName" . }}
+                  key: {{ .Values.database.secretKey }}
+                  optional: false
+            - name: DEV_MODE
+              value: "false"
+            - name: SSRF_ALLOW_HTTP
+              value: "false"
+            - name: LOG_FORMAT
+              value: "json"
+            - name: LOG_LEVEL
+              value: "info"
+          resources:
+            {{- toYaml .Values.migrations.resources | nindent 12 }}
+          securityContext:
+            {{- toYaml .Values.containerSecurityContext | nindent 12 }}
+        {{- end }}
       volumes:
         - name: app-secrets
           secret:
